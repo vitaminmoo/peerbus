@@ -31,6 +31,7 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
+  overflow-x: clip; /* the full-bleed diagram is 100vw, scrollbar included */
   background: var(--bg);
   color: var(--fg);
   font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -127,130 +128,205 @@ h3 {
 
 /* Pairing diagram: three terminals side by side, time running down, with
    arrows in the gutters for what passes between them. The first machine is
-   in the middle because both of the others pair with it. Terminals stay
-   dark in both themes. */
+   in the middle because both of the others pair with it. Styled as
+   cassette-futurist hardware: beige casings, stencilled unit plates, amber
+   phosphor. The terminals look the same in both themes. */
 
-.seq {
-  --term-bg: #1c1e22;
-  --term-bar: #2a2d33;
-  --term-edge: #34373e;
-  --term-fg: #d9d6cf;
-  --term-dim: #8c919a;
-  --term-prompt: #8fcf7c;
-  --gutter: 8.5rem;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--gutter) minmax(0, 1fr) var(--gutter) minmax(0, 1fr);
-  width: min(88rem, calc(100vw - 2rem));
+.pan {
+  /* full-bleed; scrolls sideways when the screen is narrower than the diagram */
+  width: 100vw;
   position: relative;
   left: 50%;
-  transform: translateX(-50%);
-  margin: 1.75rem 0 2.25rem;
+  margin: 1.75rem 0 .4rem -50vw;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  cursor: grab;
+  outline: none;
+}
+.pan.dragging { cursor: grabbing; user-select: none; }
+.pan:focus-visible { box-shadow: inset 0 0 0 2px var(--link); }
+
+.pan-hint {
+  margin: 0 0 2rem;
+  color: var(--muted);
+  font-size: .85rem;
+  text-align: center;
 }
 
-.seq .b { grid-column: 1; --c: #7cc79a; }
-.seq .a { grid-column: 3; --c: #8ab4f0; }
-.seq .f { grid-column: 5; --c: #e9a86a; }
+.seq {
+  --casing: #d6ceb6;
+  --casing-hi: #e6dfca;
+  --casing-lo: #a99f84;
+  --ink: #2c2a22;
+  --screen: #14130e;
+  --phosphor: #f3b44a;
+  --phosphor-dim: #a4803e;
+  --phosphor-hi: #ffe2a6;
+  --edge: 9px;
+  --tw: 38rem;
+  --gutter: 9.5rem;
+  display: grid;
+  grid-template-columns: var(--tw) var(--gutter) var(--tw) var(--gutter) var(--tw);
+  width: max-content;
+  margin: 0 auto;
+  padding: .5rem 1.5rem 1.25rem;
+}
+
+.seq .b { grid-column: 1; --c: #3f9a8e; }
+.seq .a { grid-column: 3; --c: #e2772b; }
+.seq .f { grid-column: 5; --c: #c9443a; }
 .seq .g1 { grid-column: 2; }
 .seq .g2 { grid-column: 4; }
 
 .seq .bar, .seq .t, .seq .msg { grid-row: var(--r); }
 
+/* the casing and screen, behind each terminal's rows */
 .seq .term {
   grid-row: var(--from) / var(--to);
-  background: var(--term-bg);
-  border: 1px solid var(--term-edge);
-  border-radius: 8px;
-  box-shadow: 0 6px 18px rgb(0 0 0 / .18);
+  border: var(--edge) solid var(--casing);
+  border-top-width: 0;
+  border-radius: 7px;
+  background:
+    repeating-linear-gradient(transparent 0 2px, rgb(0 0 0 / .28) 2px 3px),
+    radial-gradient(ellipse at 50% 40%, #1d1b13, var(--screen) 75%);
+  box-shadow:
+    inset 0 0 0 2px var(--casing-lo),
+    inset 0 0 40px rgb(0 0 0 / .7),
+    0 2px 0 var(--casing-lo),
+    0 10px 24px rgb(0 0 0 / .22);
 }
 
+/* the unit plate */
 .seq .bar {
+  position: relative;
   z-index: 1;
-  margin: 1px 1px 0;
-  padding: .35rem .7rem .35rem 3.4rem;
+  padding: .55rem 2.2rem .55rem 4.1rem;
   border-radius: 7px 7px 0 0;
-  background:
-    radial-gradient(circle, #ec6a5e 4px, transparent 4.5px) .6rem 50% / 12px 12px no-repeat,
-    radial-gradient(circle, #f4bf4f 4px, transparent 4.5px) 1.45rem 50% / 12px 12px no-repeat,
-    radial-gradient(circle, #61c554 4px, transparent 4.5px) 2.3rem 50% / 12px 12px no-repeat,
-    var(--term-bar);
-  color: var(--c);
-  font: 600 .74rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  text-align: center;
+  background: linear-gradient(var(--casing-hi), var(--casing) 60%, #cbc2a8);
+  border-bottom: 2px solid var(--casing-lo);
+  color: var(--ink);
+  font: 700 .72rem/1.3 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: .16em;
+  text-transform: uppercase;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* hazard stripes in the unit's colour */
+.seq .bar::before {
+  content: "";
+  position: absolute;
+  left: .7rem;
+  top: 50%;
+  width: 2.6rem;
+  height: .85rem;
+  transform: translateY(-50%);
+  background: repeating-linear-gradient(-45deg, var(--c) 0 5px, var(--ink) 5px 10px);
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .35);
+}
+
+/* power LED */
+.seq .bar::after {
+  content: "";
+  position: absolute;
+  right: .85rem;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 2px rgb(0 0 0 / .25), 0 0 8px var(--c);
 }
 
 .seq pre.t {
   z-index: 1;
   margin: 0;
-  padding: .55rem .9rem .35rem;
+  padding: .55rem calc(var(--edge) + 1rem) .35rem;
   background: none;
   border-radius: 0;
-  color: var(--term-fg);
-  font-size: .74rem;
+  color: var(--phosphor);
+  font-size: .78rem;
   line-height: 1.5;
+  text-shadow: 0 0 5px rgb(243 180 74 / .45);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   overflow: visible;
 }
 
-.seq .t .c { color: var(--term-dim); font-style: italic; }
-.seq .t .p { color: var(--term-prompt); }
+.seq .t .c { color: var(--phosphor-dim); text-shadow: none; }
+.seq .t .p { color: var(--phosphor-hi); }
 
+/* invite codes: corrupted signal, not text */
 .seq .secret {
-  color: #c9a6f2;
-  text-shadow: 0 0 6px rgb(201 166 242 / .55);
+  color: #7fe9d2;
+  text-shadow: -1.5px 0 rgb(255 60 90 / .75), 1.5px 0 rgb(60 200 255 / .75), 0 0 6px rgb(127 233 210 / .6);
+  letter-spacing: .05em;
+}
+.seq .secret span {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  overflow: hidden;
+  vertical-align: top;
 }
 
+/* signal lines between the units */
 .seq .msg {
   position: relative;
   z-index: 1;
   align-self: center;
-  padding: .3rem .45rem 1.05rem;
+  padding: .3rem .5rem 1.1rem;
   text-align: center;
   color: var(--muted);
-  font-size: .74rem;
-  line-height: 1.3;
+  font: .7rem/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: .03em;
 }
 
-/* the line */
 .seq .msg::before {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
-  bottom: .55rem;
-  border-top: 1.5px solid var(--arrow);
+  bottom: .58rem;
+  border-top: 2px dashed var(--arrow);
 }
 
-/* the arrowhead */
 .seq .msg::after {
   content: "";
   position: absolute;
-  bottom: calc(.55rem - 4.25px);
-  border: 5px solid transparent;
+  bottom: calc(.58rem - 4.5px);
+  border: 5.5px solid transparent;
 }
-.seq .msg.to-r::after { right: 0; border-right: 0; border-left: 8px solid var(--arrow); }
-.seq .msg.to-l::after { left: 0; border-left: 0; border-right: 8px solid var(--arrow); }
+.seq .msg.to-r::after { right: -2px; border-right: 0; border-left: 9px solid var(--arrow); }
+.seq .msg.to-l::after { left: -2px; border-left: 0; border-right: 9px solid var(--arrow); }
 
-/* Too narrow for three terminals: stack the steps in time order, each
-   labelled with whose terminal it is. */
-@media (max-width: 72rem) {
-  .seq { display: block; width: auto; left: auto; transform: none; }
+/* Phones: stack the steps in time order, each labelled with its unit. */
+@media (max-width: 40rem) {
+  .pan { width: auto; left: auto; margin: 1.5rem 0 2rem; overflow: visible; cursor: auto; }
+  .pan-hint { display: none; }
+  .seq { display: block; width: auto; padding: 0; }
   .seq .term, .seq .bar { display: none; }
   .seq pre.t {
     margin: .5rem 0;
     padding: .6rem .9rem;
-    background: var(--term-bg);
+    background: repeating-linear-gradient(transparent 0 2px, rgb(0 0 0 / .28) 2px 3px), var(--screen);
+    border: 5px solid var(--casing);
     border-radius: 6px;
   }
   .seq pre.t::before {
     content: attr(data-lane);
     display: block;
-    margin-bottom: .3rem;
-    color: var(--c);
-    font: 600 .74rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    margin: -.6rem -.9rem .5rem;
+    padding: .3rem .9rem;
+    background: var(--casing);
+    border-left: 6px solid var(--c);
+    color: var(--ink);
+    font: 700 .68rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    text-shadow: none;
   }
   .seq .msg { padding: 0 0 0 1rem; text-align: left; }
   .seq .msg::after { content: none; }
