@@ -86,10 +86,13 @@ func (m *model) View() string {
 func (m *model) header(w int) string {
 	// plain text inside the plate: a nested style's reset would drop the
 	// plate's background for the rest of the title
-	left := plate.Render("▚▚▚ PEERBUS ▸ INBOX")
-	if m.page == historyPage {
-		left = plate.Render("▚▚▚ PEERBUS ▸ HISTORY")
+	tab := func(name string, on bool) string {
+		if on {
+			return selected.Padding(0, 1).Render(name)
+		}
+		return label.Padding(0, 1).Render(name)
 	}
+	left := plate.Render("▚▚▚ PEERBUS") + " " + tab("INBOX", m.page != historyPage) + tab("HISTORY", m.page == historyPage) + dim.Render(" ⇥ tab")
 	sessions := len(m.sessions)
 	live := good.Render("●") + " live"
 	if !m.loaded {
