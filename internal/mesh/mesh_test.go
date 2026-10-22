@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vitaminmoo/peerbus/internal/history"
 	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/proto"
@@ -274,6 +275,37 @@ func TestOwnSessionsAndFriends(t *testing.T) {
 		t.Fatalf("declined notice: %+v", n)
 	}
 
+	// Alice's machine logged all of it, each message once: the one between
+	// her own sessions from both ends, bob's answers, and what became of
+	// hers.
+	got := map[string]proto.HistoryEntry{}
+	msgs, err := (history.Store{Dir: stateA}).Messages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range msgs {
+		if _, dup := got[e.Text]; dup {
+			t.Fatalf("logged twice: %+v", e)
+		}
+		got[e.Text] = e
+	}
+	for text, want := range map[string]proto.HistoryEntry{
+		"hello two":   {From: "alice/one#a1a1a1", To: "alice/two#a2a2a2", Status: "delivered"},
+		"hi back":     {From: "alice/two#a2a2a2", To: "alice/one#a1a1a1", Status: "delivered"},
+		"secret plan": {From: "alice/one#a1a1a1", To: "bob/bobsess#b1b1b1", Peer: "bob", Status: "delivered"}, // held, then approved
+		"sounds good": {From: "bob/bobsess#b1b1b1", To: "alice/one#a1a1a1", Peer: "bob", Status: "delivered"},
+		"unrelated":   {From: "alice/one#a1a1a1", To: "bob/", Peer: "bob", Status: "declined"},
+	} {
+		e := got[text]
+		if e.From != want.From || e.To != want.To || e.Peer != want.Peer || e.Status != want.Status {
+			t.Errorf("%q: %+v", text, e)
+		}
+	}
+	// Bob's side: alice's routed message, held for him and declined.
+	if e, err := (history.Store{Dir: stateB}).Find("alice/one#a1a1a1", res.ID); err != nil || e.Status != "declined" || e.To != "bob/" {
+		t.Fatalf("bob's record: %+v %v", e, err)
+	}
+
 	// A session can't approve or list through another session: only the
 	// local CLI may.
 	tgt, err := a1.resolve("two")
@@ -482,9 +514,10 @@ func TestRemoteApproveAndRoute(t *testing.T) {
 	laptop := otherMachine(t, alice)
 	deskState := t.TempDir()
 
+	bobState := t.TempDir()
 	desk1, evDesk := start(t, alice, deskState, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"})
 	start(t, laptop, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "l1l1l1l1", Name: "notes", Host: "laptop", Status: "idle"})
-	b1, evB := start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
+	b1, evB := start(t, bob, bobState, srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
 	waitFor(t, "everyone to meet", func() bool {
 		return sees(b1, "alice/notes#l1l1l1") && sees(b1, "alice/ghidra#d1d1d1") && sees(desk1, "alice/notes#l1l1l1")
 	})
@@ -538,7 +571,35 @@ func TestRemoteApproveAndRoute(t *testing.T) {
 		t.Fatalf("laptop inbox after: %+v %v", view, err)
 	}
 
-	// Sessions can't approve or deliver on their own say-so.
+	// Both of alice's machines logged bob's message: the laptop held it and
+	// handed it on, the desk received it. The control client reads the
+	// desk's history directly and the laptop's over the link, in full on
+	// request.
+	var lv proto.HistoryView
+	if err := lapLink.Request(context.Background(), proto.Frame{Type: proto.THistory}, &lv); err != nil {
+		t.Fatal(err)
+	}
+	if lv.Machine != "laptop" || len(lv.Messages) != 1 || lv.Messages[0].Status != "delivered" || lv.Messages[0].To != "alice/ghidra#d1d1d1" || lv.Messages[0].Peer != "bob" {
+		t.Fatalf("laptop history: %+v", lv)
+	}
+	dv, err := ctl.History()
+	if err != nil || len(dv.Messages) != 2 || dv.Messages[0].Text != "thanks" || dv.Messages[1].Text != "can I borrow ghidra?" {
+		t.Fatalf("desk history: %+v %v", dv, err)
+	}
+	var one proto.HistoryEntry
+	if err := lapLink.Request(context.Background(), proto.Frame{Type: proto.THistory, ID: res.ID, Meta: map[string]string{"from": lv.Messages[0].From}}, &one); err != nil || one.Text != "can I borrow ghidra?" {
+		t.Fatalf("one message: %+v %v", one, err)
+	}
+	// Bob hears it was approved.
+	if e, err := (history.Store{Dir: bobState}).Find("bob/bobsess#b1b1b1", res.ID); err != nil || e.Status != "delivered" {
+		t.Fatalf("bob's record: %+v %v", e, err)
+	}
+
+	// Sessions can't approve or deliver on their own say-so, or read
+	// another machine's history.
+	if err := desk1.resolveLink(t, "notes").Request(context.Background(), proto.Frame{Type: proto.THistory}, &lv); err == nil {
+		t.Fatal("a session read another machine's history")
+	}
 	var sv proto.InboxView
 	if err := desk1.resolveLink(t, "notes").Request(context.Background(), proto.Frame{Type: proto.TInbox}, &sv); err == nil {
 		t.Fatal("a session listed another machine's inbox")

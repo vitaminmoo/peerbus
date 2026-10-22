@@ -43,6 +43,7 @@ Using:
   peerbus peers [-filter TEXT] [-json]            sessions reachable right now
   peerbus send [-thread ID] TO TEXT...
   peerbus tui                                     every held message on all your machines: approve, route, decline
+                                                  and the history of every message, yours and friends'
   peerbus inbox [-watch]                          this machine's messages waiting for your approval
   peerbus approve [-to SESSION] ID                deliver a held message (interactive only)
   peerbus deny ID

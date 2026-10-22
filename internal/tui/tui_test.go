@@ -140,4 +140,24 @@ func TestRouteAcrossMachines(t *testing.T) {
 	if len(m.items) != 0 {
 		t.Fatalf("still held: %+v", m.items)
 	}
+
+	// The history has it once, from both machines that logged it, routed
+	// to the desk; it's a friend's message, not one between alice's
+	// sessions.
+	m.applyHistory(m.fetchHistory()().(historyMsg))
+	if len(m.hist) != 1 {
+		t.Fatalf("history: %+v", m.hist)
+	}
+	r := m.hist[0]
+	if r.e.Text != "logs are ready" || r.e.Status != "delivered" || r.e.To != "alice/ghidra#d1d1d1" || len(r.machines) != 2 || !r.local || len(r.via) == 0 {
+		t.Fatalf("record: %+v on %v", r.e, r.machines)
+	}
+	m.filter = ownMessages
+	if len(m.shown()) != 0 {
+		t.Fatal("a friend's message among alice's own")
+	}
+	m.filter = friendMessages
+	if len(m.shown()) != 1 {
+		t.Fatal("friend filter lost it")
+	}
 }

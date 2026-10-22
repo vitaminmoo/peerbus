@@ -2,7 +2,8 @@
 // every one of their machines. Messages for a session can be approved
 // there or routed to another session; messages sent to you as a person get
 // a session picked; your own send=ask messages get a go-ahead. Nothing here
-// reaches an agent's context until you act.
+// reaches an agent's context until you act. A second page shows the
+// history of every message your sessions sent and received.
 package tui
 
 import (
@@ -65,6 +66,13 @@ type session struct {
 	addr string
 }
 
+type page int
+
+const (
+	inboxPage page = iota
+	historyPage
+)
+
 type mode int
 
 const (
@@ -85,6 +93,17 @@ type model struct {
 	pick     int // routing: chosen session
 	mode     mode
 
+	page page
+
+	// history page
+	hist        []record
+	hcursor     int // into shown()
+	filter      filter
+	histLoaded  bool
+	histPolling bool
+	full        map[string]string // whole texts of messages cut short, by key
+	asked       map[string]bool   // whole texts requested
+
 	seen    map[string]bool // held ids already shown, for notifications
 	loaded  bool
 	busy    bool // an action is in flight
@@ -97,7 +116,7 @@ type model struct {
 }
 
 func newModel(ctx context.Context, m *mesh.Mesh, self string) *model {
-	return &model{ctx: ctx, mesh: m, self: self, seen: map[string]bool{}}
+	return &model{ctx: ctx, mesh: m, self: self, seen: map[string]bool{}, full: map[string]string{}, asked: map[string]bool{}}
 }
 
 type (
@@ -121,36 +140,45 @@ func anim() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return animMsg{} })
 }
 
-// fetch asks every session of ours for its inbox. Sessions on one machine
-// share one, so the first answer per inbox wins.
+// askAll sends f to every session in own and collects the answers by
+// inbox: sessions on one machine share one, so the first answer per inbox
+// wins, and byInbox lists the sessions that can act on each.
+func askAll[T any](ctx context.Context, own []*mesh.Link, f proto.Frame, inboxOf func(T) string) (views map[string]T, byInbox map[string][]*mesh.Link) {
+	views, byInbox = map[string]T{}, map[string][]*mesh.Link{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, l := range own {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, askTimeout)
+			defer cancel()
+			var v T
+			if err := l.Request(ctx, f, &v); err != nil {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			id := inboxOf(v)
+			byInbox[id] = append(byInbox[id], l)
+			if _, ok := views[id]; !ok {
+				views[id] = v
+			}
+		}()
+	}
+	wg.Wait()
+	return views, byInbox
+}
+
+// fetch asks every session of ours for its inbox.
 func (m *model) fetch() tea.Cmd {
 	return func() tea.Msg {
 		own := m.mesh.Own()
 		var sessions []session
-		byInbox := map[string][]*mesh.Link{}
-		views := map[string]proto.InboxView{}
-		var mu sync.Mutex
-		var wg sync.WaitGroup
 		for _, l := range own {
 			sessions = append(sessions, session{link: l, info: l.Info(), addr: l.Address()})
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ctx, cancel := context.WithTimeout(m.ctx, askTimeout)
-				defer cancel()
-				var v proto.InboxView
-				if err := l.Request(ctx, proto.Frame{Type: proto.TInbox}, &v); err != nil {
-					return
-				}
-				mu.Lock()
-				defer mu.Unlock()
-				byInbox[v.InboxID] = append(byInbox[v.InboxID], l)
-				if _, ok := views[v.InboxID]; !ok {
-					views[v.InboxID] = v
-				}
-			}()
 		}
-		wg.Wait()
+		views, byInbox := askAll(m.ctx, own, proto.Frame{Type: proto.TInbox}, func(v proto.InboxView) string { return v.InboxID })
 		var items []item
 		for id, v := range views {
 			for _, h := range v.Held {
@@ -185,6 +213,26 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fetchedMsg:
 		m.applyFetch(msg)
 		return m, tick()
+	case histTickMsg:
+		if m.page != historyPage {
+			m.histPolling = false
+			return m, nil
+		}
+		return m, m.fetchHistory()
+	case historyMsg:
+		m.applyHistory(msg)
+		if m.page != historyPage {
+			m.histPolling = false
+			return m, nil
+		}
+		return m, tea.Batch(histTick(), m.wantFull())
+	case fullMsg:
+		if msg.err != nil {
+			delete(m.asked, msg.key)
+			m.say("couldn't load the whole message: "+msg.err.Error(), true)
+		} else {
+			m.full[msg.key] = msg.text
+		}
 	case doneMsg:
 		m.busy = false
 		if msg.err != nil {
@@ -247,6 +295,12 @@ func (m *model) say(s string, bad bool) { m.status, m.bad, m.statusT = s, bad, t
 func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if k.String() == "tab" && m.mode == browsing {
+		return m, m.turnPage()
+	}
+	if m.page == historyPage {
+		return m.historyKey(k)
 	}
 	switch m.mode {
 	case routing:

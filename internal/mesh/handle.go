@@ -65,6 +65,18 @@ func (m *Mesh) handle(l *Link, f proto.Frame) {
 		}
 		res, err := m.inboxView()
 		l.reply(f.Req, res, err)
+	case proto.THistory:
+		if !l.isOwnControl() {
+			l.reply(f.Req, nil, errors.New("not allowed"))
+			return
+		}
+		if f.ID != "" {
+			res, err := m.HistoryMessage(f.Meta["from"], f.ID)
+			l.reply(f.Req, res, err)
+			return
+		}
+		res, err := m.History()
+		l.reply(f.Req, res, err)
 	case proto.TApprove:
 		if !l.isOwnControl() {
 			l.reply(f.Req, nil, errors.New("not allowed"))
@@ -135,18 +147,27 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 		msg.FromSID = info.SID
 	}
 	res := proto.SendResult{ID: msg.ID, Thread: thread, To: msg.To}
+	rec := proto.HistoryEntry{ID: msg.ID, Thread: thread, From: msg.From, To: msg.To, Text: msg.Text, At: msg.SentAt}
+	if peer != nil {
+		rec.Peer = peer.Name
+	}
 	if peer == nil || peer.Perms.Deliver == "auto" || m.inbox.Approved(l.key, thread) {
 		m.cfg.OnMessage(msg, peer != nil)
 		res.Status = "delivered"
+		rec.Status = res.Status
+		m.record(rec)
 		return res, nil
 	}
 	h := &inbox.Held{Msg: msg, Peer: identity.Key(l.key), PeerName: peer.Name, Target: me.SID}
 	if strings.HasSuffix(f.To, "/") {
 		h.Target = "" // addressed to us as a person; the human picks the session
+		rec.To = m.selfName() + "/"
 	}
 	if err := m.inbox.Add(h); err != nil {
 		return proto.SendResult{}, fmt.Errorf("couldn't hold the message: %w", err)
 	}
+	rec.Status = "held"
+	m.record(rec)
 	m.notice("held",
 		fmt.Sprintf("A message from %s (another person) is waiting for your user's approval in `peerbus tui`. Tell them briefly; don't approve or deny it yourself.", msg.From),
 		map[string]string{"held_id": h.ID, "from": msg.From})
@@ -171,6 +192,11 @@ func (m *Mesh) onNotice(l *Link, f proto.Frame) {
 		user := m.userOf(l)
 		meta := map[string]string{"msg_id": f.Meta["msg_id"], "thread": f.Meta["thread"], "status": f.Meta["status"]}
 		switch f.Meta["status"] {
+		case "approved", "declined":
+			status := map[string]string{"approved": "delivered", "declined": "declined"}[f.Meta["status"]]
+			m.record(proto.HistoryEntry{ID: f.Meta["msg_id"], From: m.selfFrom(), Status: status})
+		}
+		switch f.Meta["status"] {
 		case "approved":
 			m.notice("status", fmt.Sprintf("%s approved your message %s; it was delivered. Replies in thread %s now flow without approval for %s.", user, f.Meta["msg_id"], f.Meta["thread"], inbox.Grant), meta)
 		case "declined":
@@ -181,12 +207,13 @@ func (m *Mesh) onNotice(l *Link, f proto.Frame) {
 
 // Send delivers text to a session or person named by to.
 func (m *Mesh) Send(ctx context.Context, to, text, thread string) (proto.SendResult, error) {
-	return m.send(ctx, to, text, thread, m.cfg.Kind == proto.KindControl)
+	return m.send(ctx, to, text, thread, "", m.cfg.Kind == proto.KindControl)
 }
 
 // send is Send; human marks a message the human sent or approved
-// themselves, which satisfies a peer's send=ask.
-func (m *Mesh) send(ctx context.Context, to, text, thread string, human bool) (proto.SendResult, error) {
+// themselves, which satisfies a peer's send=ask. id is empty for a new
+// message.
+func (m *Mesh) send(ctx context.Context, to, text, thread, id string, human bool) (proto.SendResult, error) {
 	if strings.TrimSpace(text) == "" {
 		return proto.SendResult{}, errors.New("empty message")
 	}
@@ -214,13 +241,17 @@ func (m *Mesh) send(ctx context.Context, to, text, thread string, human bool) (p
 	if thread == "" {
 		thread = proto.NewID(6)
 	}
-	id := proto.NewID(6)
+	if id == "" {
+		id = proto.NewID(6)
+	}
 	addr := m.addr(tgt.link)
 	wire := tgt.link.Address()
 	if routed {
 		addr, wire = tgt.user+"/", tgt.user+"/"
 	}
+	rec := proto.HistoryEntry{ID: id, Thread: thread, From: m.selfFrom(), To: addr, Text: text}
 	if tgt.peer != nil {
+		rec.Peer = tgt.peer.Name
 		if tgt.peer.Perms.Send == "ask" && !human {
 			h := &inbox.Held{
 				Msg:      proto.Message{ID: id, Thread: thread, From: m.SelfAddress(), FromSID: mySID, To: addr, Text: text, SentAt: time.Now().Unix()},
@@ -232,6 +263,8 @@ func (m *Mesh) send(ctx context.Context, to, text, thread string, human bool) (p
 			if err := m.inbox.Add(h); err != nil {
 				return proto.SendResult{}, err
 			}
+			rec.Status = "ask"
+			m.record(rec)
 			return proto.SendResult{Status: "ask", ID: h.ID, Thread: thread, To: addr}, nil
 		}
 		// We accept replies in a thread we started.
@@ -242,7 +275,56 @@ func (m *Mesh) send(ctx context.Context, to, text, thread string, human bool) (p
 		return proto.SendResult{}, err
 	}
 	res.To = addr
+	rec.Status = res.Status
+	m.record(rec)
 	return res, nil
+}
+
+// selfFrom is this session's address as a session we send to records it.
+func (m *Mesh) selfFrom() string {
+	if m.cfg.Kind == proto.KindControl {
+		return m.selfName() + "/cli"
+	}
+	return m.SelfAddress()
+}
+
+// record adds to this machine's message history. Failing only costs the
+// TUI's view of the message, so it's logged and otherwise ignored.
+func (m *Mesh) record(e proto.HistoryEntry) {
+	if err := m.history.Add(e); err != nil {
+		m.log.Printf("history: %v", err)
+	}
+}
+
+// History lists the messages this machine's sessions sent and received,
+// newest first, as many as fit in one frame, long ones cut short.
+func (m *Mesh) History() (proto.HistoryView, error) {
+	const budget, preview = 96 << 10, 400
+	msgs, err := m.history.Messages()
+	if err != nil {
+		return proto.HistoryView{}, err
+	}
+	m.mu.Lock()
+	v := proto.HistoryView{Machine: m.info.Host, InboxID: m.inboxID(), Messages: []proto.HistoryEntry{}}
+	m.mu.Unlock()
+	size := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		e := msgs[i]
+		if len(e.Text) > preview {
+			e.Text, e.Cut = strings.ToValidUTF8(e.Text[:preview], ""), true
+		}
+		b, _ := json.Marshal(e)
+		if size += len(b) + 1; size > budget {
+			break
+		}
+		v.Messages = append(v.Messages, e)
+	}
+	return v, nil
+}
+
+// HistoryMessage is one message from this machine's history in full.
+func (m *Mesh) HistoryMessage(from, id string) (proto.HistoryEntry, error) {
+	return m.history.Find(from, id)
 }
 
 // SubscribeIdle asks for one notice when peer next goes idle or disconnects.
@@ -320,7 +402,7 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 		if h.Target != mySID {
 			return proto.SendResult{}, errors.New("that message was written by another session; approve it there")
 		}
-		res, err := m.send(m.ctx, h.Msg.To, h.Msg.Text, h.Msg.Thread, true)
+		res, err := m.send(m.ctx, h.Msg.To, h.Msg.Text, h.Msg.Thread, h.Msg.ID, true)
 		if err != nil {
 			return proto.SendResult{}, err
 		}
@@ -350,6 +432,7 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 		if _, err := m.inbox.Take(id); err != nil {
 			return proto.SendResult{}, err
 		}
+		m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, To: res.To, Status: "delivered"})
 	}
 	msg := h.Msg
 	if l := m.linkBySID(h.Peer, msg.FromSID); l != nil {
@@ -363,6 +446,7 @@ func (m *Mesh) deliverHere(h *inbox.Held) proto.SendResult {
 	msg := h.Msg
 	msg.To = m.SelfAddress()
 	m.cfg.OnMessage(msg, true)
+	m.record(proto.HistoryEntry{ID: msg.ID, Thread: msg.Thread, From: msg.From, To: msg.To, Peer: h.PeerName, Text: msg.Text, At: msg.SentAt, Status: "delivered"})
 	return proto.SendResult{Status: "delivered", ID: msg.ID, Thread: msg.Thread, To: msg.To}
 }
 
@@ -401,6 +485,11 @@ func (m *Mesh) deny(id string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	status := "declined"
+	if h.Outbound {
+		status = "unsent" // ours, and we said no
+	}
+	m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, Status: status})
 	if !h.Outbound {
 		if l := m.linkBySID(h.Peer, h.Msg.FromSID); l != nil {
 			l.write(proto.Frame{Type: proto.TNotice, Kind: "status", Meta: map[string]string{"status": "declined", "msg_id": h.Msg.ID, "thread": h.Msg.Thread}})

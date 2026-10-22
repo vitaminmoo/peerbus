@@ -110,6 +110,11 @@ const (
 	// Between your own sessions: a held message, approved and handed to the
 	// session it was routed to. Data is the held message.
 	TDeliver = "deliver"
+
+	// From your own CLI or TUI to a session: the messages that machine's
+	// sessions sent and received, newest first, long ones cut short. With ID
+	// (and Meta["from"]), that one message in full.
+	THistory = "history"
 )
 
 // Hello kinds.
@@ -183,4 +188,28 @@ type InboxView struct {
 	Machine string     `json:"machine"` // its name
 	InboxID string     `json:"inboxId"` // the same from every session sharing this inbox
 	Held    []HeldView `json:"held"`
+}
+
+// HistoryEntry is a message one of your sessions sent or received, or a
+// later change in what happened to it (Status, and To once a message held
+// for you as a person is routed). Entries with the same From and ID are one
+// message.
+type HistoryEntry struct {
+	ID     string `json:"id"`
+	Thread string `json:"thread,omitempty"`
+	From   string `json:"from"`
+	To     string `json:"to,omitempty"`
+	Peer   string `json:"peer,omitempty"` // our name for the other person; empty between your own sessions
+	Status string `json:"status"`         // delivered, held, ask (waiting on send=ask), declined, unsent (ask declined)
+	At     int64  `json:"at"`
+	Text   string `json:"text,omitempty"`
+	Cut    bool   `json:"cut,omitempty"` // Text is only the start of the message
+}
+
+// HistoryView is one machine's message history, as a session there reports
+// it to your own control clients.
+type HistoryView struct {
+	Machine  string         `json:"machine"`
+	InboxID  string         `json:"inboxId"` // the same from every session sharing this history
+	Messages []HistoryEntry `json:"messages"`
 }

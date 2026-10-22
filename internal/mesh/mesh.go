@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vitaminmoo/peerbus/internal/history"
 	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/proto"
@@ -48,7 +49,7 @@ const (
 
 type Config struct {
 	Store    identity.Store
-	StateDir string // inbox and same-machine discovery
+	StateDir string // inbox, history and same-machine discovery
 	// Server is the rendezvous server; empty keeps us to this machine.
 	Server string
 	STUN   []string
@@ -65,12 +66,13 @@ type Config struct {
 }
 
 type Mesh struct {
-	cfg   Config
-	log   *log.Logger
-	key   ed25519.PrivateKey
-	pub   ed25519.PublicKey
-	node  *transport.Node
-	inbox inbox.Store
+	cfg     Config
+	log     *log.Logger
+	key     ed25519.PrivateKey
+	pub     ed25519.PublicKey
+	node    *transport.Node
+	inbox   inbox.Store
+	history history.Store
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -98,6 +100,7 @@ func Start(ctx context.Context, cfg Config) (*Mesh, error) {
 		cfg:     cfg,
 		log:     cfg.Log,
 		inbox:   inbox.Store{Dir: cfg.StateDir},
+		history: history.Store{Dir: cfg.StateDir},
 		info:    cfg.Info,
 		ready:   make(chan struct{}),
 		links:   map[transport.Handle]*Link{},

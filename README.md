@@ -116,6 +116,11 @@ The CLI does the same from a shell: `peerbus peers`, `peerbus send`,
 `peerbus tui` is where the human handles held messages: every one on all
 your machines, with the full text, to approve, decline, or route to any of
 your sessions on any machine. Nothing in it reaches an agent until you act.
+`tab` switches to the history: every message your sessions sent and
+received in the last 30 days, on every machine, and what became of it;
+`f` narrows it to messages between your own sessions or with friends.
+Each machine keeps its part in `~/.local/state/peerbus/history.jsonl`,
+readable only by you, like the inbox.
 
 ## Rendezvous server
 
@@ -160,6 +165,7 @@ Layout:
 | `internal/transport` | QUIC transport, rendezvous/relay server, STUN, NAT lab |
 | `internal/identity`, `internal/pairing` | Keys, peers, permissions, invites |
 | `internal/inbox` | Held messages and thread approvals |
+| `internal/history` | Messages each machine's sessions sent and received |
 | `internal/proto` | Frames sessions exchange |
 | `site/` | https://peerb.us (Workers static assets) |
 

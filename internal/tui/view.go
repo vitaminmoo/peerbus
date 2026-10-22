@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -65,14 +66,18 @@ func (m *model) View() string {
 	box := func(w, h int) lipgloss.Style {
 		return lipgloss.NewStyle().Width(w).Height(h).MaxWidth(w).MaxHeight(h)
 	}
+	list, detail := m.list, m.detail
+	if m.page == historyPage {
+		list, detail = m.historyList, m.historyDetail
+	}
 	if w >= 96 {
 		lw := max(38, w*2/5)
-		left := box(lw, body).Render(m.list(lw, body))
-		right := box(w-lw-2, body).Render(m.detail(w-lw-2, body))
+		left := box(lw, body).Render(list(lw, body))
+		right := box(w-lw-2, body).Render(detail(w-lw-2, body))
 		out = append(out, lipgloss.JoinHorizontal(lipgloss.Top, left, "  ", right))
 	} else {
 		lh := max(1, min(body/2, max(6, body/3)))
-		out = append(out, box(w, lh).Render(m.list(w, lh)), box(w, body-lh).Render(m.detail(w, body-lh)))
+		out = append(out, box(w, lh).Render(list(w, lh)), box(w, body-lh).Render(detail(w, body-lh)))
 	}
 	out = append(out, m.statusLine(w), m.footer(w))
 	return strings.Join(out, "\n")
@@ -82,6 +87,9 @@ func (m *model) header(w int) string {
 	// plain text inside the plate: a nested style's reset would drop the
 	// plate's background for the rest of the title
 	left := plate.Render("▚▚▚ PEERBUS ▸ INBOX")
+	if m.page == historyPage {
+		left = plate.Render("▚▚▚ PEERBUS ▸ HISTORY")
+	}
 	sessions := len(m.sessions)
 	live := good.Render("●") + " live"
 	if !m.loaded {
@@ -157,6 +165,88 @@ func (m *model) row(it item, sel bool, w int) string {
 		return selected.Render(line)
 	}
 	return line
+}
+
+// historyList is the history page's list: one row per message, newest
+// first, under the current filter.
+func (m *model) historyList(w, h int) string {
+	if !m.histLoaded {
+		return "\n" + dim.Render("  "+glitch(m.frame, 12)+"  gathering history…")
+	}
+	shown := m.shown()
+	lines := []string{hazard(laneColour[m.filter], 2) + " " + label.Render(strings.ToUpper(filterTitles[m.filter])) + " " + dim.Render(fmt.Sprint(len(shown)))}
+	if len(shown) == 0 {
+		return strings.Join(lines, "\n") + "\n\n" + amber.Render("  ░▒▓ NOTHING YET ▓▒░") + "\n\n" + dim.Render("  Messages your sessions send and\n  receive appear here. f filters.")
+	}
+	rows := max(1, h-1)
+	start := max(0, min(m.hcursor-rows/2, len(shown)-rows))
+	for i := start; i < len(shown) && i < start+rows; i++ {
+		lines = append(lines, m.historyRow(shown[i], i == m.hcursor, w))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m *model) historyRow(r record, sel bool, w int) string {
+	who := m.shortAddr(r.e.From) + " → " + m.shortAddr(r.e.To)
+	age := ago(r.e.At)
+	marker := "  "
+	if sel {
+		marker = "▸ "
+	}
+	glyph, gs := "●", good
+	switch r.e.Status {
+	case "held", "ask":
+		glyph, gs = "◌", amber
+	case "declined", "unsent":
+		glyph, gs = "✕", bad
+	}
+	room := w - lipgloss.Width(marker) - len(age) - 4
+	if lipgloss.Width(who) > room {
+		who = truncate(who, room)
+	}
+	pad := strings.Repeat(" ", max(1, w-lipgloss.Width(marker)-lipgloss.Width(who)-len(age)-3))
+	if sel {
+		// one style for the whole row: a nested one's reset would cut the
+		// highlight short
+		return selected.Render(marker + who + pad + glyph + " " + age + " ")
+	}
+	return marker + who + pad + gs.Render(glyph) + " " + dim.Render(age) + " "
+}
+
+func (m *model) historyDetail(w, h int) string {
+	r, ok := m.currentRecord()
+	if !ok {
+		return ""
+	}
+	e := r.e
+	field := func(k, v string) string { return label.Render(fmt.Sprintf("%-7s", k)) + v }
+	when := time.Unix(e.At, 0).Format("Jan 02 15:04")
+	lines := []string{
+		field("FROM", e.From),
+		field("TO", e.To),
+		field("SENT", fmt.Sprintf("%s · %s ago · thread %s", when, ago(e.At), e.Thread)),
+		field("STATUS", m.statusText(e)),
+		field("LOGGED", "on "+strings.Join(r.machines, ", ")),
+		"",
+	}
+	text := e.Text
+	more := ""
+	if e.Cut {
+		if t, ok := m.full[r.key()]; ok {
+			text = t
+		} else {
+			more = dim.Render("… loading the rest")
+		}
+	}
+	tl := strings.Split(lipgloss.NewStyle().Width(w-4).Render(text), "\n")
+	if more != "" {
+		tl = append(tl, more)
+	}
+	if room := h - len(lines) - 2; len(tl) > room && room > 1 {
+		tl = append(tl[:room-1], dim.Render(fmt.Sprintf("… %d more lines", len(tl)-room+1)))
+	}
+	lines = append(lines, screen.Width(w-2).Render(strings.Join(tl, "\n")))
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) detail(w, h int) string {
@@ -236,8 +326,16 @@ func (m *model) footer(w int) string {
 		s = k("↑↓", "pick") + k("enter", "deliver there") + k("esc", "back")
 	case confirmingDeny:
 		s = k("y", "decline") + k("any", "keep")
-	default:
-		s = k("↑↓", "move") + k("a", "approve") + k("r", "route") + k("d", "decline") + k("q", "quit")
+	case browsing:
+		if m.page == historyPage {
+			held := "inbox"
+			if n := len(m.items); n > 0 {
+				held = fmt.Sprintf("inbox (%d held)", n)
+			}
+			s = k("↑↓", "move") + k("f", "filter") + k("tab", held) + k("q", "quit")
+		} else {
+			s = k("↑↓", "move") + k("a", "approve") + k("r", "route") + k("d", "decline") + k("tab", "history") + k("q", "quit")
+		}
 	}
 	return truncate(s, w)
 }
