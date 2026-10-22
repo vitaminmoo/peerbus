@@ -177,3 +177,27 @@ func (s Store) Update(fn func(*Peers) error) error {
 	}
 	return os.Rename(tmp, s.peersPath())
 }
+
+// SelfName is what your sessions are listed under and what you suggest
+// being called when pairing.
+func (ps *Peers) SelfName() string {
+	if ps.Self.Name != "" {
+		return ps.Self.Name
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return CleanName(u)
+	}
+	h, _ := os.Hostname()
+	return CleanName(h)
+}
+
+// Enabled lists the peers whose sessions may connect.
+func (ps *Peers) Enabled() []*Peer {
+	var out []*Peer
+	for _, p := range ps.Peers {
+		if p.Enabled {
+			out = append(out, p)
+		}
+	}
+	return out
+}

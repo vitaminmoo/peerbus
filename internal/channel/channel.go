@@ -1,7 +1,8 @@
 // Package channel is the MCP server Claude Code spawns in each session. It
-// declares the claude/channel capability so broker deliveries are pushed into
-// the session as <channel source="peerbus" ...> events, and offers tools to
-// list peers, send, subscribe to idle notices and advertise resources.
+// declares the claude/channel capability so messages from other sessions are
+// pushed into this one as <channel source="peerbus" ...> events, and offers
+// tools to list peers, send, subscribe to idle notices and advertise
+// resources. Sessions reach each other through the mesh.
 package channel
 
 import (
@@ -17,13 +18,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vitaminmoo/peerbus/internal/client"
 	"github.com/vitaminmoo/peerbus/internal/config"
+	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/mcp"
+	"github.com/vitaminmoo/peerbus/internal/mesh"
 	"github.com/vitaminmoo/peerbus/internal/proto"
 )
 
-const instructions = `peerbus connects this session to your user's other Claude Code sessions (other Claude accounts and other machines) and, when configured, to Claude sessions belonging to other people.
+const instructions = `peerbus connects this session to your user's other Claude Code sessions (other Claude accounts and other machines) and to Claude sessions belonging to people your user has paired with.
+
+Addresses look like user/name#ref: user is your user's name for the person (their own name for their own sessions), name is the session name, ref a short id. list_peers shows them.
 
 Inbound messages arrive as <channel source="peerbus" kind="message" from="user/name#ref" from_user="..." thread="..." msg_id="..." foreign="true|false">text</channel>.
 - To reply, call the peerbus send tool with to set to the from attribute and thread set to the thread attribute.
@@ -35,12 +39,12 @@ Notices arrive with kind="held" (a third-party message is waiting for your user'
 Use list_peers to discover sessions and the resources they advertise (MCP servers, programs, repos). Use advertise to publish resources this session can offer. Use subscribe_idle instead of polling another session.`
 
 type Channel struct {
-	log    *log.Logger
-	cfg    *config.Client
-	cfgErr error
-	srv    *mcp.Server
-	bus    *client.Client
-	events chan map[string]any
+	log     *log.Logger
+	cfg     *config.Client
+	srv     *mcp.Server
+	mesh    *mesh.Mesh
+	meshErr error
+	events  chan map[string]any
 
 	mu       sync.Mutex
 	regPath  string
@@ -54,7 +58,6 @@ func Run(ctx context.Context, version string) error {
 		log:    log.New(os.Stderr, "peerbus-channel ", log.LstdFlags),
 		events: make(chan map[string]any, 1024),
 	}
-	c.cfg, c.cfgErr = config.LoadClient()
 	c.srv = &mcp.Server{
 		Name:         "peerbus",
 		Version:      version,
@@ -64,20 +67,30 @@ func Run(ctx context.Context, version string) error {
 	}
 	go c.pump(ctx)
 
-	if c.cfgErr == nil {
-		c.initSession(ctx)
-		c.bus = &client.Client{
-			URL:       c.cfg.URL,
-			Hello:     c.hello,
-			OnFrame:   c.onFrame,
-			OnState:   c.onState,
-			Autostart: client.AutostartLocal(c.cfg.URL),
-			Log:       c.log,
-		}
-		go c.bus.Run(ctx)
-		go c.watch(ctx)
+	var err error
+	if c.cfg, err = config.LoadClient(); err != nil {
+		c.meshErr = err
+		c.log.Printf("%v", err)
+		return c.srv.Serve(ctx, os.Stdin, os.Stdout)
+	}
+	c.initSession(ctx)
+	c.mesh, err = mesh.Start(ctx, mesh.Config{
+		Store:     identity.Store{Dir: config.Dir()},
+		StateDir:  config.StateDir(),
+		Server:    c.cfg.Server(),
+		STUN:      c.cfg.STUN,
+		Kind:      proto.KindSession,
+		Info:      c.info,
+		Log:       c.log,
+		OnMessage: c.onMessage,
+		OnNotice:  c.onNotice,
+	})
+	if err != nil {
+		c.meshErr = err
+		c.log.Printf("%v", err)
 	} else {
-		c.log.Printf("%v", c.cfgErr)
+		c.log.Printf("this session is %s", c.mesh.SelfAddress())
+		go c.watch(ctx)
 	}
 	return c.srv.Serve(ctx, os.Stdin, os.Stdout)
 }
@@ -86,13 +99,12 @@ func (c *Channel) initSession(ctx context.Context) {
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
 	c.info = proto.SessionInfo{
-		SID:          "proc-" + proto.NewID(8),
-		Name:         filepath.Base(cwd),
-		Host:         host,
-		Account:      accountLabel(),
-		Cwd:          cwd,
-		Status:       "unknown",
-		ShareDetails: c.cfg.ShareDetails,
+		SID:     proto.NewID(8),
+		Name:    filepath.Base(cwd),
+		Host:    host,
+		Account: accountLabel(),
+		Cwd:     cwd,
+		Status:  "unknown",
 	}
 	if n := os.Getenv("PEERBUS_NAME"); n != "" {
 		c.info.Name = n
@@ -107,14 +119,14 @@ func (c *Channel) initSession(ctx context.Context) {
 }
 
 // applyRegistryLocked copies name/status/cwd/sid from the registry file and
-// reports whether the session id changed.
-func (c *Channel) applyRegistryLocked() (changed, sidChanged bool) {
+// reports whether anything changed.
+func (c *Channel) applyRegistryLocked() bool {
 	if c.regPath == "" {
-		return false, false
+		return false
 	}
 	r, ok := readRegistry(c.regPath)
 	if !ok {
-		return false, false
+		return false
 	}
 	old := c.info
 	if r.SessionID != "" {
@@ -129,20 +141,11 @@ func (c *Channel) applyRegistryLocked() (changed, sidChanged bool) {
 	if r.Status != "" {
 		c.info.Status = r.Status
 	}
-	sidChanged = old.SID != c.info.SID
-	changed = sidChanged || old.Name != c.info.Name || old.Cwd != c.info.Cwd || old.Status != c.info.Status
-	return changed, sidChanged
+	return old.SID != c.info.SID || old.Name != c.info.Name || old.Cwd != c.info.Cwd || old.Status != c.info.Status
 }
 
 func (c *Channel) resourcesLocked() []proto.Resource {
 	return slices.Concat(c.auto, c.agentRes)
-}
-
-func (c *Channel) hello() proto.Frame {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s := c.info
-	return proto.Frame{Type: proto.THello, V: proto.Version, Token: c.cfg.Token, Kind: "session", Session: &s}
 }
 
 // watch follows the registry file for name and busy/idle changes.
@@ -162,52 +165,36 @@ func (c *Channel) watch(ctx context.Context) {
 			c.regPath = findRegistry()
 		}
 		oldCwd := c.info.Cwd
-		changed, sidChanged := c.applyRegistryLocked()
+		changed := c.applyRegistryLocked()
 		if c.info.Cwd != oldCwd {
 			c.auto = autoResources(c.cfg, c.info.Cwd)
 			c.info.Resources = c.resourcesLocked()
 		}
 		s := c.info
 		c.mu.Unlock()
-		switch {
-		case sidChanged:
-			c.bus.Reconnect()
-		case changed:
-			c.bus.Send(ctx, proto.Frame{Type: proto.TUpdate, Session: &s})
+		if changed {
+			c.mesh.Update(s)
 		}
 	}
 }
 
-func (c *Channel) onState(up bool, err error) {
-	if up {
-		w, _ := c.bus.Welcome()
-		c.log.Printf("connected to %s as %s", c.cfg.URL, w.Address)
-	} else if err != nil && !errors.Is(err, context.Canceled) {
-		c.log.Printf("broker connection: %v", err)
-	}
+func (c *Channel) onMessage(m proto.Message, foreign bool) {
+	c.emit(m.Text, map[string]string{
+		"kind":      "message",
+		"from":      m.From,
+		"from_user": m.FromUser,
+		"thread":    m.Thread,
+		"msg_id":    m.ID,
+		"foreign":   fmt.Sprint(foreign),
+	})
 }
 
-func (c *Channel) onFrame(f proto.Frame) {
-	switch f.Type {
-	case proto.TDeliver:
-		if f.Msg == nil {
-			return
-		}
-		c.emit(f.Msg.Text, map[string]string{
-			"kind":      "message",
-			"from":      f.Msg.From,
-			"from_user": f.Msg.FromUser,
-			"thread":    f.Msg.Thread,
-			"msg_id":    f.Msg.ID,
-			"foreign":   fmt.Sprint(f.Foreign),
-		})
-	case proto.TNotice:
-		meta := map[string]string{"kind": f.Kind}
-		for k, v := range f.Meta {
-			meta[k] = v
-		}
-		c.emit(f.Text, meta)
+func (c *Channel) onNotice(kind, text string, meta map[string]string) {
+	m := map[string]string{"kind": kind}
+	for k, v := range meta {
+		m[k] = v
 	}
+	c.emit(text, m)
 }
 
 func (c *Channel) emit(content string, meta map[string]string) {
@@ -237,12 +224,18 @@ func (c *Channel) pump(ctx context.Context) {
 	}
 }
 
-func (c *Channel) ready() error {
-	if c.cfgErr != nil {
-		return c.cfgErr
+func (c *Channel) ready(ctx context.Context) error {
+	if c.meshErr != nil {
+		return c.meshErr
 	}
-	if _, up := c.bus.Welcome(); !up {
-		return fmt.Errorf("%w at %s; it may be starting, try again shortly", client.ErrNotConnected, c.cfg.URL)
+	if c.mesh == nil {
+		return errors.New("peerbus is still starting")
+	}
+	// Give the first round of discovery a moment after startup.
+	select {
+	case <-c.mesh.Ready():
+	case <-time.After(4 * time.Second):
+	case <-ctx.Done():
 	}
 	return nil
 }
@@ -261,7 +254,7 @@ func (c *Channel) tools() []mcp.Tool {
 	return []mcp.Tool{
 		{
 			Name:        "list_peers",
-			Description: "List Claude sessions reachable over peerbus: your user's sessions on every account and machine, and sessions of other users you share a group with. Shows each session's address, status, host and advertised resources (MCP servers, programs, repos).",
+			Description: "List Claude sessions reachable over peerbus right now: your user's sessions on every account and machine, and sessions of people your user has paired with. Shows each session's address, status, host, how it's connected, and what it advertises (MCP servers, programs, repos).",
 			InputSchema: schema(map[string]any{
 				"filter": str("Optional case-insensitive substring matched against address, host, cwd and resources, e.g. \"ghidra\""),
 			}),
@@ -269,7 +262,7 @@ func (c *Channel) tools() []mcp.Tool {
 		},
 		{
 			Name:        "send",
-			Description: "Send a plain-text message to another Claude session. `to` is an address from list_peers (user/name#ref), a bare session name of your own, or \"user/\" to let another person's human choose the session. Messages to your own sessions are delivered immediately; messages to other people are held for their approval unless the thread was already approved. To reply to an inbound message, pass its from and thread attributes. The recipient's human first sees only the first line, so make it a self-contained summary.",
+			Description: "Send a plain-text message to another Claude session. `to` is an address from list_peers (user/name#ref), a bare session name of your own, or \"user/\" to let another person's human choose the session. Messages to your own sessions are delivered immediately; messages to other people are held for their approval unless they've allowed you or the thread was already approved. To reply to an inbound message, pass its from and thread attributes. The recipient's human first sees only the first line, so make it a self-contained summary.",
 			InputSchema: schema(map[string]any{
 				"to":     str("Recipient address"),
 				"text":   str("Message text"),
@@ -307,15 +300,10 @@ func (c *Channel) listPeers(ctx context.Context, raw json.RawMessage) (string, e
 		Filter string `json:"filter"`
 	}
 	json.Unmarshal(raw, &args)
-	if err := c.ready(); err != nil {
+	if err := c.ready(ctx); err != nil {
 		return "", err
 	}
-	var peers []proto.PeerView
-	if err := c.bus.Request(ctx, proto.Frame{Type: proto.TList}, &peers); err != nil {
-		return "", err
-	}
-	w, _ := c.bus.Welcome()
-	return FormatPeers(peers, w.Address, args.Filter), nil
+	return FormatPeers(c.mesh.Views(), c.mesh.SelfAddress(), args.Filter), nil
 }
 
 // FormatPeers renders a peer listing for Claude or the CLI.
@@ -338,10 +326,10 @@ func FormatPeers(peers []proto.PeerView, self, filter string) string {
 		}
 		if p.Foreign && !foreignHeader {
 			foreignHeader = true
-			b.WriteString("\nOther people's sessions (first message in a thread waits for their approval):\n")
+			b.WriteString("\nOther people's sessions (a first message to them may wait for their approval):\n")
 		}
 		shown++
-		fmt.Fprintf(&b, "  %s  %s  host=%s", p.Address, p.Status, p.Host)
+		fmt.Fprintf(&b, "  %s  %s  host=%s  via=%s", p.Address, p.Status, p.Host, p.Via)
 		if p.Account != "" {
 			fmt.Fprintf(&b, "  account=%s", p.Account)
 		}
@@ -357,7 +345,7 @@ func FormatPeers(peers []proto.PeerView, self, filter string) string {
 		if filter != "" {
 			fmt.Fprintf(&b, "\nNo other sessions match %q.\n", filter)
 		} else {
-			b.WriteString("\nNo other sessions are connected.\n")
+			b.WriteString("\nNo other sessions are reachable right now.\n")
 		}
 	}
 	return b.String()
@@ -394,11 +382,10 @@ func (c *Channel) send(ctx context.Context, raw json.RawMessage) (string, error)
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	if err := c.ready(); err != nil {
+	if err := c.ready(ctx); err != nil {
 		return "", err
 	}
-	var res proto.SendResult
-	err := c.bus.Request(ctx, proto.Frame{Type: proto.TSend, To: args.To, Text: args.Text, Thread: args.Thread}, &res)
+	res, err := c.mesh.Send(ctx, args.To, args.Text, args.Thread)
 	if err != nil {
 		return "", fmt.Errorf("not sent: %w", err)
 	}
@@ -409,10 +396,10 @@ func DescribeSend(res proto.SendResult) string {
 	switch res.Status {
 	case "delivered":
 		return fmt.Sprintf("Delivered to %s (thread %s, message %s).", res.To, res.Thread, res.ID)
-	case "queued":
-		return fmt.Sprintf("%s is offline; queued (thread %s, message %s). It is delivered when that session reconnects.", res.To, res.Thread, res.ID)
 	case "held":
 		return fmt.Sprintf("Held for approval by the recipient's human (to %s, thread %s, message %s). A status notice arrives when they approve or decline it. Don't resend it.", res.To, res.Thread, res.ID)
+	case "ask":
+		return fmt.Sprintf("Waiting for your user's go-ahead: messages to %s need their approval. Tell your user; they can send it with `peerbus approve %s`. Don't resend it.", res.To, res.ID)
 	}
 	return fmt.Sprintf("%s: %s (thread %s)", res.Status, res.To, res.Thread)
 }
@@ -422,20 +409,17 @@ func (c *Channel) subscribeIdle(ctx context.Context, raw json.RawMessage) (strin
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	if err := c.ready(); err != nil {
+	if err := c.ready(ctx); err != nil {
 		return "", err
 	}
-	var res map[string]string
-	if err := c.bus.Request(ctx, proto.Frame{Type: proto.TSubscribeIdle, Peer: args.Peer}, &res); err != nil {
+	status, addr, err := c.mesh.SubscribeIdle(ctx, args.Peer)
+	if err != nil {
 		return "", err
 	}
-	switch res["status"] {
-	case "idle":
-		return res["peer"] + " is already idle.", nil
-	case "offline":
-		return res["peer"] + " is offline.", nil
+	if status == "idle" {
+		return addr + " is already idle.", nil
 	}
-	return "Subscribed: one notice arrives when " + res["peer"] + " next goes idle or disconnects (expires after 12h).", nil
+	return "Subscribed: one notice arrives when " + addr + " next goes idle or disconnects.", nil
 }
 
 func (c *Channel) advertise(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -446,8 +430,8 @@ func (c *Channel) advertise(ctx context.Context, raw json.RawMessage) (string, e
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	if c.cfgErr != nil {
-		return "", c.cfgErr
+	if c.meshErr != nil {
+		return "", c.meshErr
 	}
 	c.mu.Lock()
 	if args.Replace {
@@ -463,8 +447,8 @@ func (c *Channel) advertise(ctx context.Context, raw json.RawMessage) (string, e
 	c.info.Resources = c.resourcesLocked()
 	s := c.info
 	c.mu.Unlock()
-	if err := c.bus.Send(ctx, proto.Frame{Type: proto.TUpdate, Session: &s}); err != nil {
-		return "Saved; it will be published when the broker connection is back.", nil
+	if c.mesh != nil {
+		c.mesh.Update(s)
 	}
 	return fmt.Sprintf("Advertising %d resources: %s", len(s.Resources), formatResources(s.Resources)), nil
 }

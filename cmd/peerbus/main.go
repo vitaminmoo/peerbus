@@ -1,6 +1,6 @@
-// Command peerbus is the broker, the Claude Code channel server, and the CLI
-// for message passing between Claude Code sessions across accounts, machines
-// and people.
+// Command peerbus is the Claude Code channel server, the rendezvous server,
+// and the CLI for message passing between Claude Code sessions across
+// accounts, machines and people.
 package main
 
 import (
@@ -16,20 +16,19 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/vitaminmoo/peerbus/internal/broker"
 	"github.com/vitaminmoo/peerbus/internal/channel"
-	"github.com/vitaminmoo/peerbus/internal/client"
 	"github.com/vitaminmoo/peerbus/internal/config"
+	"github.com/vitaminmoo/peerbus/internal/inbox"
+	"github.com/vitaminmoo/peerbus/internal/mesh"
 	"github.com/vitaminmoo/peerbus/internal/proto"
 	"github.com/vitaminmoo/peerbus/internal/transport"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const usage = `peerbus: message passing between Claude Code sessions
 
@@ -39,24 +38,17 @@ Identity and pairing:
   peerbus pair [-name NAME] CODE                  redeem an invite code
   peerbus peer list | rm | enable | disable | rename | set NAME k=v...
 
-Legacy broker setup:
-  peerbus init [-user NAME] [-listen HOST:PORT]   create a broker config and a client config for this machine
-  peerbus join URL TOKEN                          point this machine at an existing broker
-  peerbus user add NAME | token NAME | list       manage broker users (prints tokens once)
-  peerbus group add GROUP USER... | rm GROUP USER... | list
-  peerbus mcp-config                              print the MCP server entry for Claude Code
-
-Running:
-  peerbus broker [-listen HOST:PORT]              run the broker (local brokers autostart)
-  peerbus rendezvous [-listen HOST:PORT]          run the rendezvous/relay server (UDP)
-  peerbus channel                                 the MCP channel server Claude Code spawns
-
 Using:
-  peerbus peers [-filter TEXT] [-json]
+  peerbus peers [-filter TEXT] [-json]            sessions reachable right now
   peerbus send [-thread ID] TO TEXT...
-  peerbus inbox [-watch]                          third-party messages waiting for you
+  peerbus inbox [-watch]                          messages waiting for your approval
   peerbus approve [-to SESSION] ID                deliver a held message (interactive only)
   peerbus deny ID
+
+Running:
+  peerbus channel                                 the MCP channel server Claude Code spawns
+  peerbus mcp-config                              print the MCP server entry for Claude Code
+  peerbus rendezvous [-listen HOST:PORT]          run a rendezvous/relay server (UDP)
 `
 
 func main() {
@@ -69,8 +61,6 @@ func main() {
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
-	case "broker":
-		err = runBroker(ctx, args)
 	case "rendezvous":
 		err = runRendezvous(ctx, args)
 	case "channel":
@@ -83,14 +73,6 @@ func main() {
 		err = runPair(ctx, args)
 	case "peer":
 		err = runPeer(args)
-	case "init":
-		err = runInit(args)
-	case "join":
-		err = runJoin(args)
-	case "user":
-		err = runUser(args)
-	case "group":
-		err = runGroup(args)
 	case "mcp-config":
 		err = runMCPConfig()
 	case "peers":
@@ -132,34 +114,6 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 	}
 }
 
-func runBroker(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("broker", flag.ExitOnError)
-	cfgPath := fs.String("config", config.BrokerPath(), "broker config")
-	statePath := fs.String("state", filepath.Join(config.StateDir(), "broker-state.json"), "broker state file")
-	listen := fs.String("listen", "", "override the config's listen address")
-	if _, err := parse(fs, args); err != nil {
-		return err
-	}
-	b, err := broker.New(*cfgPath, *statePath)
-	if err != nil {
-		return err
-	}
-	addr := b.ListenAddr()
-	if *listen != "" {
-		addr = *listen
-	}
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
-	b.Log.Printf("peerbus %s listening on %s", version, ln.Addr())
-	pidFile := filepath.Join(filepath.Dir(*statePath), "broker.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintln(os.Getpid())), 0o600); err == nil {
-		defer os.Remove(pidFile)
-	}
-	return b.Serve(ctx, ln)
-}
-
 func runRendezvous(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rendezvous", flag.ExitOnError)
 	listen := fs.String("listen", fmt.Sprintf("0.0.0.0:%d", config.DefaultPort), "UDP listen address")
@@ -180,174 +134,6 @@ func runRendezvous(ctx context.Context, args []string) error {
 	return srv.Serve(ctx)
 }
 
-func runInit(args []string) error {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	user := fs.String("user", os.Getenv("USER"), "your peerbus user name")
-	listen := fs.String("listen", fmt.Sprintf("127.0.0.1:%d", config.DefaultPort), "broker listen address")
-	force := fs.Bool("force", false, "overwrite existing configs")
-	if _, err := parse(fs, args); err != nil {
-		return err
-	}
-	if err := validName(*user); err != nil {
-		return err
-	}
-	for _, p := range []string{config.BrokerPath(), config.ClientPath()} {
-		if _, err := os.Stat(p); err == nil && !*force {
-			return fmt.Errorf("%s already exists (use -force to overwrite)", p)
-		}
-	}
-	token := config.NewToken(*user)
-	bc := &config.Broker{
-		Listen: *listen,
-		Users:  map[string]*config.User{*user: {Tokens: []string{config.HashToken(token)}}},
-		Groups: map[string][]string{},
-	}
-	if err := config.WriteJSON(config.BrokerPath(), bc); err != nil {
-		return err
-	}
-	if err := config.WriteJSON(config.ClientPath(), &config.Client{URL: "ws://" + *listen, Token: token}); err != nil {
-		return err
-	}
-	fmt.Printf("Wrote %s and %s (user %q).\n", config.BrokerPath(), config.ClientPath(), *user)
-	fmt.Println("Every Claude account on this machine shares the client config, so they all act as the same peerbus user.")
-	fmt.Println("Next: add peerbus to Claude Code (see `peerbus mcp-config`).")
-	return nil
-}
-
-func validName(n string) error {
-	if n == "" || strings.ContainsAny(n, "/#[] \t") {
-		return fmt.Errorf("invalid name %q (no spaces, '/', '#', '[' or ']')", n)
-	}
-	return nil
-}
-
-func runJoin(args []string) error {
-	fs := flag.NewFlagSet("join", flag.ExitOnError)
-	force := fs.Bool("force", false, "overwrite an existing client config")
-	pos, err := parse(fs, args)
-	if err != nil {
-		return err
-	}
-	if len(pos) != 2 {
-		return errors.New("usage: peerbus join URL TOKEN")
-	}
-	if _, err := os.Stat(config.ClientPath()); err == nil && !*force {
-		return fmt.Errorf("%s already exists (use -force to overwrite)", config.ClientPath())
-	}
-	c := &config.Client{URL: pos[0], Token: pos[1]}
-	if old, err := config.LoadClient(); err == nil {
-		c.ShareDetails, c.Resources, c.Programs = old.ShareDetails, old.Resources, old.Programs
-	}
-	if err := config.WriteJSON(config.ClientPath(), c); err != nil {
-		return err
-	}
-	fmt.Println("Wrote", config.ClientPath())
-	return nil
-}
-
-func loadBrokerConfig() (*config.Broker, error) {
-	bc, err := config.LoadBroker(config.BrokerPath())
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no broker config at %s on this machine (run peerbus init where the broker runs)", config.BrokerPath())
-	}
-	return bc, err
-}
-
-func runUser(args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: peerbus user add NAME | token NAME | list")
-	}
-	bc, err := loadBrokerConfig()
-	if err != nil {
-		return err
-	}
-	switch args[0] {
-	case "list":
-		names := make([]string, 0, len(bc.Users))
-		for n := range bc.Users {
-			names = append(names, n)
-		}
-		slices.Sort(names)
-		for _, n := range names {
-			fmt.Printf("%s (%d tokens)\n", n, len(bc.Users[n].Tokens))
-		}
-		return nil
-	case "add", "token":
-		if len(args) != 2 {
-			return fmt.Errorf("usage: peerbus user %s NAME", args[0])
-		}
-		name := args[1]
-		if err := validName(name); err != nil {
-			return err
-		}
-		u := bc.Users[name]
-		if args[0] == "add" && u != nil {
-			return fmt.Errorf("user %q exists; use `peerbus user token %s` for another token", name, name)
-		}
-		if args[0] == "token" && u == nil {
-			return fmt.Errorf("no user %q", name)
-		}
-		if u == nil {
-			u = &config.User{}
-			bc.Users[name] = u
-		}
-		token := config.NewToken(name)
-		u.Tokens = append(u.Tokens, config.HashToken(token))
-		if err := config.WriteJSON(config.BrokerPath(), bc); err != nil {
-			return err
-		}
-		fmt.Printf("Token for %s (shown once):\n  %s\n\nOn their machine:\n  peerbus join ws://%s %s\n", name, token, bc.Listen, token)
-		if args[0] == "add" {
-			fmt.Printf("\nThey can't see or message anyone until you share a group: peerbus group add GROUP %s %s\n", os.Getenv("USER"), name)
-		}
-		return nil
-	}
-	return fmt.Errorf("unknown user command %q", args[0])
-}
-
-func runGroup(args []string) error {
-	if len(args) < 1 {
-		return errors.New("usage: peerbus group add GROUP USER... | rm GROUP USER... | list")
-	}
-	bc, err := loadBrokerConfig()
-	if err != nil {
-		return err
-	}
-	switch args[0] {
-	case "list":
-		for g, m := range bc.Groups {
-			fmt.Printf("%s: %s\n", g, strings.Join(m, ", "))
-		}
-		return nil
-	case "add", "rm":
-		if len(args) < 3 {
-			return fmt.Errorf("usage: peerbus group %s GROUP USER...", args[0])
-		}
-		g := args[1]
-		for _, u := range args[2:] {
-			if args[0] == "add" {
-				if bc.Users[u] == nil {
-					return fmt.Errorf("no user %q", u)
-				}
-				if !slices.Contains(bc.Groups[g], u) {
-					bc.Groups[g] = append(bc.Groups[g], u)
-				}
-			} else {
-				bc.Groups[g] = slices.DeleteFunc(bc.Groups[g], func(x string) bool { return x == u })
-			}
-		}
-		if len(bc.Groups[g]) == 0 {
-			delete(bc.Groups, g)
-		}
-		if err := config.WriteJSON(config.BrokerPath(), bc); err != nil {
-			return err
-		}
-		fmt.Printf("%s: %s\n", g, strings.Join(bc.Groups[g], ", "))
-		return nil
-	}
-	return fmt.Errorf("unknown group command %q", args[0])
-}
-
 func runMCPConfig() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -360,42 +146,64 @@ func runMCPConfig() error {
 	return nil
 }
 
-// control connects as a control client (the human's side).
-func control(ctx context.Context, watch bool, onFrame func(proto.Frame)) (*client.Client, error) {
+func debugLog() *log.Logger {
+	if os.Getenv("PEERBUS_DEBUG") != "" {
+		return log.New(os.Stderr, "peerbus ", log.LstdFlags)
+	}
+	return nil
+}
+
+// control starts a short-lived mesh for the CLI. With server empty it only
+// finds sessions on this machine. It returns after the first round of
+// discovery, or after wait.
+func control(ctx context.Context, server string, wait time.Duration) (*mesh.Mesh, error) {
 	cfg, err := config.LoadClient()
 	if err != nil {
 		return nil, err
 	}
-	c := &client.Client{
-		URL: cfg.URL,
-		Hello: func() proto.Frame {
-			return proto.Frame{Type: proto.THello, V: proto.Version, Token: cfg.Token, Kind: "control", Watch: watch}
-		},
-		OnFrame:   onFrame,
-		Autostart: client.AutostartLocal(cfg.URL),
+	host, _ := os.Hostname()
+	m, err := mesh.Start(ctx, mesh.Config{
+		Store:    idStore(),
+		StateDir: config.StateDir(),
+		Server:   server,
+		STUN:     cfg.STUN,
+		Kind:     proto.KindControl,
+		Info:     proto.SessionInfo{SID: proto.NewID(8), Name: "cli", Host: host},
+		Log:      debugLog(),
+	})
+	if err != nil {
+		return nil, err
 	}
-	if err := c.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connecting to %s: %w", cfg.URL, err)
+	select {
+	case <-m.Ready():
+	case <-time.After(wait):
+	case <-ctx.Done():
 	}
-	return c, nil
+	return m, nil
 }
 
 func runPeers(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("peers", flag.ExitOnError)
 	filter := fs.String("filter", "", "substring filter")
 	asJSON := fs.Bool("json", false, "print JSON")
+	local := fs.Bool("local", false, "this machine only")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	c, err := control(ctx, false, nil)
+	cfg, err := config.LoadClient()
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	var peers []proto.PeerView
-	if err := c.Request(ctx, proto.Frame{Type: proto.TList}, &peers); err != nil {
+	server := cfg.Server()
+	if *local {
+		server = ""
+	}
+	m, err := control(ctx, server, 8*time.Second)
+	if err != nil {
 		return err
 	}
+	defer m.Close()
+	peers := m.Views()
 	if *asJSON {
 		b, _ := json.MarshalIndent(peers, "", "  ")
 		fmt.Println(string(b))
@@ -415,13 +223,17 @@ func runSend(ctx context.Context, args []string) error {
 	if len(pos) < 2 {
 		return errors.New("usage: peerbus send [-thread ID] TO TEXT...")
 	}
-	c, err := control(ctx, false, nil)
+	cfg, err := config.LoadClient()
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	var res proto.SendResult
-	if err := c.Request(ctx, proto.Frame{Type: proto.TSend, To: pos[0], Text: strings.Join(pos[1:], " "), Thread: *thread}, &res); err != nil {
+	m, err := control(ctx, cfg.Server(), 8*time.Second)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	res, err := m.Send(ctx, pos[0], strings.Join(pos[1:], " "), *thread)
+	if err != nil {
 		return err
 	}
 	fmt.Println(channel.DescribeSend(res))
@@ -429,12 +241,17 @@ func runSend(ctx context.Context, args []string) error {
 	return nil
 }
 
+func inboxStore() inbox.Store { return inbox.Store{Dir: config.StateDir()} }
+
 func printHeld(h proto.HeldView) {
-	to := h.To
-	if h.Routed {
-		to += " (you pick the session: approve -to SESSION)"
+	switch {
+	case h.Outbound:
+		fmt.Printf("[%s] %s  yours, to %s  (waiting for your go-ahead)\n", h.ID, time.Unix(h.HeldAt, 0).Format("Jan 02 15:04"), h.To)
+	case h.Routed:
+		fmt.Printf("[%s] %s  from %s  to you (pick a session: approve -to SESSION)\n", h.ID, time.Unix(h.HeldAt, 0).Format("Jan 02 15:04"), h.From)
+	default:
+		fmt.Printf("[%s] %s  from %s  to %s\n", h.ID, time.Unix(h.HeldAt, 0).Format("Jan 02 15:04"), h.From, h.To)
 	}
-	fmt.Printf("[%s] %s  from %s  to %s\n", h.ID, time.Unix(h.HeldAt, 0).Format("Jan 02 15:04"), h.From, to)
 	for _, line := range strings.Split(strings.TrimRight(h.Text, "\n"), "\n") {
 		fmt.Printf("    %s\n", line)
 	}
@@ -446,33 +263,49 @@ func runInbox(ctx context.Context, args []string) error {
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
-	c, err := control(ctx, *watch, func(f proto.Frame) {
-		if f.Type != proto.THeld || f.Held == nil {
-			return
-		}
-		printHeld(*f.Held)
-		if path, err := exec.LookPath("notify-send"); err == nil {
-			exec.Command(path, "peerbus: message from "+f.Held.From, firstLine(f.Held.Text)).Run()
-		}
-	})
+	st := inboxStore()
+	state, err := st.Load()
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	var held []proto.HeldView
-	if err := c.Request(ctx, proto.Frame{Type: proto.TInbox}, &held); err != nil {
-		return err
+	seen := map[string]bool{}
+	for _, h := range state.Held {
+		seen[h.ID] = true
+		printHeld(h.View())
 	}
-	if len(held) == 0 && !*watch {
+	if len(state.Held) == 0 && !*watch {
 		fmt.Println("No held messages.")
 	}
-	for _, h := range held {
-		printHeld(h)
+	if !*watch {
+		return nil
 	}
-	if *watch {
-		<-ctx.Done()
+	last := st.ModTime()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Second):
+		}
+		if mod := st.ModTime(); mod.Equal(last) {
+			continue
+		} else {
+			last = mod
+		}
+		state, err := st.Load()
+		if err != nil {
+			continue
+		}
+		for _, h := range state.Held {
+			if seen[h.ID] {
+				continue
+			}
+			seen[h.ID] = true
+			printHeld(h.View())
+			if path, err := exec.LookPath("notify-send"); err == nil {
+				exec.Command(path, "peerbus: message from "+h.Msg.From, firstLine(h.Msg.Text)).Run()
+			}
+		}
 	}
-	return nil
 }
 
 func firstLine(s string) string {
@@ -485,9 +318,58 @@ func isTerminal(f *os.File) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
+// localSession finds the session on this machine that a held message
+// belongs to, or the one named by to.
+func localSession(m *mesh.Mesh, h *inbox.Held, to string) (*mesh.Link, error) {
+	locals := m.Locals()
+	var names []string
+	for _, l := range locals {
+		names = append(names, l.Address())
+	}
+	pick := func(match func(*mesh.Link) bool) *mesh.Link {
+		for _, l := range locals {
+			if match(l) {
+				return l
+			}
+		}
+		return nil
+	}
+	if h.Outbound {
+		if l := pick(func(l *mesh.Link) bool { return l.Info().SID == h.Target }); l != nil {
+			return l, nil
+		}
+		return nil, errors.New("the session that wrote this message isn't running any more")
+	}
+	if to != "" {
+		t := strings.TrimSpace(to)
+		if l := pick(func(l *mesh.Link) bool {
+			return l.Address() == t || l.Info().Name == t || strings.HasPrefix(l.Address(), t)
+		}); l != nil {
+			return l, nil
+		}
+		return nil, fmt.Errorf("no session %q on this machine; running: %s", to, strings.Join(names, ", "))
+	}
+	if h.Target != "" {
+		if l := pick(func(l *mesh.Link) bool { return l.Info().SID == h.Target }); l != nil {
+			return l, nil
+		}
+		if len(names) == 0 {
+			return nil, errors.New("that session isn't running any more, and no other peerbus session is running on this machine")
+		}
+		return nil, fmt.Errorf("that session isn't running any more; pick another with -to: %s", strings.Join(names, ", "))
+	}
+	if len(locals) == 1 {
+		return locals[0], nil
+	}
+	if len(names) == 0 {
+		return nil, errors.New("no peerbus session is running on this machine to deliver it to")
+	}
+	return nil, fmt.Errorf("pick a session with -to: %s", strings.Join(names, ", "))
+}
+
 func runApprove(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("approve", flag.ExitOnError)
-	to := fs.String("to", "", "deliver to this session of yours instead of the requested one")
+	to := fs.String("to", "", "deliver to this session of yours instead of the one it was sent to")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
@@ -501,31 +383,31 @@ func runApprove(ctx context.Context, args []string) error {
 	if !isTerminal(os.Stdin) || !isTerminal(os.Stdout) {
 		return errors.New("approve must be run interactively in a terminal")
 	}
-	c, err := control(ctx, false, nil)
+	h, err := inboxStore().Find(pos[0])
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	var held []proto.HeldView
-	if err := c.Request(ctx, proto.Frame{Type: proto.TInbox}, &held); err != nil {
+	printHeld(h.View())
+	m, err := control(ctx, "", 3*time.Second)
+	if err != nil {
 		return err
 	}
-	i := slices.IndexFunc(held, func(h proto.HeldView) bool { return h.ID == pos[0] })
-	if i < 0 {
-		return fmt.Errorf("no held message %q", pos[0])
+	defer m.Close()
+	l, err := localSession(m, h, *to)
+	if err != nil {
+		return err
 	}
-	printHeld(held[i])
-	dest := held[i].To
-	if *to != "" {
-		dest = *to
+	if h.Outbound {
+		fmt.Printf("\nSend it to %s? [y/N] ", h.Msg.To)
+	} else {
+		fmt.Printf("\nDeliver to %s? Replies and follow-ups in this thread will flow without approval for %s. [y/N] ", l.Address(), inbox.Grant)
 	}
-	fmt.Printf("\nDeliver to %s? Replies and follow-ups in this thread will flow without approval for a while. [y/N] ", dest)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
 		return errors.New("not approved")
 	}
 	var res proto.SendResult
-	if err := c.Request(ctx, proto.Frame{Type: proto.TApprove, ID: pos[0], To: *to}, &res); err != nil {
+	if err := l.Request(ctx, proto.Frame{Type: proto.TApprove, ID: h.ID}, &res); err != nil {
 		return err
 	}
 	fmt.Println(channel.DescribeSend(res))
@@ -536,14 +418,24 @@ func runDeny(ctx context.Context, args []string) error {
 	if len(args) != 1 {
 		return errors.New("usage: peerbus deny ID")
 	}
-	c, err := control(ctx, false, nil)
+	st := inboxStore()
+	h, err := st.Find(args[0])
 	if err != nil {
 		return err
 	}
-	defer c.Close()
-	if err := c.Request(ctx, proto.Frame{Type: proto.TDeny, ID: args[0]}, nil); err != nil {
+	m, err := control(ctx, "", 3*time.Second)
+	if err != nil {
 		return err
 	}
-	fmt.Println("Declined", args[0])
+	defer m.Close()
+	// A running session tells the sender; without one we just drop it.
+	if locals := m.Locals(); len(locals) > 0 {
+		if err := locals[0].Request(ctx, proto.Frame{Type: proto.TDeny, ID: h.ID}, nil); err != nil {
+			return err
+		}
+	} else if _, err := st.Take(h.ID); err != nil {
+		return err
+	}
+	fmt.Println("Declined", h.ID)
 	return nil
 }

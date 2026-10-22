@@ -1,15 +1,11 @@
-// Package config loads peerbus client and broker configuration.
+// Package config locates peerbus's files and loads the optional client
+// settings.
 package config
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,6 +20,7 @@ const (
 // server shares our NAT.
 var DefaultSTUN = []string{"stun.cloudflare.com:3478"}
 
+// Dir holds identity.key, peers.json and client.json.
 func Dir() string {
 	if d := os.Getenv("PEERBUS_CONFIG_DIR"); d != "" {
 		return d
@@ -35,6 +32,7 @@ func Dir() string {
 	return filepath.Join(home, ".config", "peerbus")
 }
 
+// StateDir holds the inbox and the same-machine discovery directory.
 func StateDir() string {
 	if d := os.Getenv("PEERBUS_STATE_DIR"); d != "" {
 		return d
@@ -46,19 +44,20 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", "peerbus")
 }
 
-func ClientPath() string { return filepath.Join(Dir(), "client.json") }
-func BrokerPath() string { return filepath.Join(Dir(), "broker.json") }
+// LocalDir is where sessions on this machine find each other.
+func LocalDir() string { return filepath.Join(StateDir(), "local") }
 
-// Client is per OS user per machine, shared by every Claude account on it,
-// so all of them act as the same peerbus user.
+func ClientPath() string { return filepath.Join(Dir(), "client.json") }
+
+// Client is optional, per OS user per machine, shared by every Claude
+// account on it.
 type Client struct {
-	URL          string           `json:"url,omitempty"`   // legacy broker
-	Token        string           `json:"token,omitempty"` // legacy broker
-	Rendezvous   string           `json:"rendezvous,omitempty"`
-	STUN         []string         `json:"stun,omitempty"`
-	ShareDetails bool             `json:"shareDetails,omitempty"` // let other users see cwd/account
-	Resources    []ClientResource `json:"resources,omitempty"`
-	Programs     []string         `json:"programs,omitempty"` // advertised when found on PATH
+	// Rendezvous is the server that introduces sessions on different
+	// machines. "none" keeps sessions to this machine.
+	Rendezvous string           `json:"rendezvous,omitempty"`
+	STUN       []string         `json:"stun,omitempty"`
+	Resources  []ClientResource `json:"resources,omitempty"`
+	Programs   []string         `json:"programs,omitempty"` // advertised when found on PATH
 }
 
 type ClientResource struct {
@@ -67,15 +66,28 @@ type ClientResource struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-type Broker struct {
-	Listen                string              `json:"listen"` // host:port
-	Users                 map[string]*User    `json:"users"`
-	Groups                map[string][]string `json:"groups"`
-	ThreadApprovalMinutes int                 `json:"threadApprovalMinutes,omitempty"`
+// LoadClient returns the client config, or defaults when there is none.
+func LoadClient() (*Client, error) {
+	var c Client
+	if err := ReadJSON(ClientPath(), &c); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if c.Rendezvous == "" {
+		c.Rendezvous = DefaultRendezvous
+	}
+	if c.STUN == nil {
+		c.STUN = DefaultSTUN
+	}
+	return &c, nil
 }
 
-type User struct {
-	Tokens []string `json:"tokens"` // sha256 hex of each token
+// Server is the rendezvous address to use, or empty for none.
+func (c *Client) Server() string {
+	switch c.Rendezvous {
+	case "none", "off", "-":
+		return ""
+	}
+	return c.Rendezvous
 }
 
 func ReadJSON(path string, v any) error {
@@ -102,74 +114,4 @@ func WriteJSON(path string, v any) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-func LoadClient() (*Client, error) {
-	var c Client
-	if err := ReadJSON(ClientPath(), &c); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("no peerbus client config at %s (run: peerbus init, or peerbus join <url> <token>)", ClientPath())
-		}
-		return nil, err
-	}
-	return &c, nil
-}
-
-// LoadClientOrDefault returns the client config, or defaults when there is
-// none, with rendezvous and STUN defaults filled in.
-func LoadClientOrDefault() (*Client, error) {
-	var c Client
-	if err := ReadJSON(ClientPath(), &c); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	if c.Rendezvous == "" {
-		c.Rendezvous = DefaultRendezvous
-	}
-	if c.STUN == nil {
-		c.STUN = DefaultSTUN
-	}
-	return &c, nil
-}
-
-// LocalDir is where sessions on this machine find each other.
-func LocalDir() string { return filepath.Join(StateDir(), "local") }
-
-func LoadBroker(path string) (*Broker, error) {
-	var b Broker
-	if err := ReadJSON(path, &b); err != nil {
-		return nil, err
-	}
-	if b.Users == nil {
-		b.Users = map[string]*User{}
-	}
-	if b.Groups == nil {
-		b.Groups = map[string][]string{}
-	}
-	if b.Listen == "" {
-		b.Listen = "127.0.0.1:" + strconv.Itoa(DefaultPort)
-	}
-	return &b, nil
-}
-
-func HashToken(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
-}
-
-func NewToken(user string) string {
-	b := make([]byte, 24)
-	rand.Read(b)
-	return "pb_" + user + "_" + base64.RawURLEncoding.EncodeToString(b)
-}
-
-func IsLocalURL(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return false
-	}
-	switch u.Hostname() {
-	case "127.0.0.1", "localhost", "::1":
-		return true
-	}
-	return false
 }

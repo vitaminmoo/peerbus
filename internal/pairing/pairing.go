@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -154,17 +153,6 @@ func proof(c *transport.Conn, secret identity.Secret) ([]byte, error) {
 	return m.Sum(nil), nil
 }
 
-func selfName(ps *identity.Peers) string {
-	if ps.Self.Name != "" {
-		return ps.Self.Name
-	}
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	h, _ := os.Hostname()
-	return h
-}
-
 func writeJSON(w io.Writer, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -227,7 +215,7 @@ func Host(ctx context.Context, store identity.Store, inv Invite, name string, op
 			writeJSON(s, reply{Error: "inviter couldn't read its peers"})
 			return
 		}
-		rep := reply{OK: true, Name: selfName(ps)}
+		rep := reply{OK: true, Name: ps.SelfName()}
 		var pairSecret identity.Secret
 		if inv.Self {
 			rep.Self = &selfBundle{Identity: hex.EncodeToString(key.Seed()), Peers: ps}
@@ -392,7 +380,7 @@ func Redeem(ctx context.Context, store identity.Store, code, name string, force 
 	if err != nil {
 		return Result{}, err
 	}
-	if err := writeJSON(s, hello{V: 1, Proof: hex.EncodeToString(pr), Name: selfName(ps)}); err != nil {
+	if err := writeJSON(s, hello{V: 1, Proof: hex.EncodeToString(pr), Name: ps.SelfName()}); err != nil {
 		return Result{}, err
 	}
 	r := bufio.NewReader(s)

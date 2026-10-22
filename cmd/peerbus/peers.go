@@ -21,11 +21,11 @@ import (
 func idStore() identity.Store { return identity.Store{Dir: config.Dir()} }
 
 func pairingOptions() (pairing.Options, error) {
-	cfg, err := config.LoadClientOrDefault()
+	cfg, err := config.LoadClient()
 	if err != nil {
 		return pairing.Options{}, err
 	}
-	return pairing.Options{Server: cfg.Rendezvous, STUN: cfg.STUN, LocalDir: config.LocalDir()}, nil
+	return pairing.Options{Server: cfg.Server(), STUN: cfg.STUN, LocalDir: config.LocalDir(), Log: debugLog()}, nil
 }
 
 // requireTerminal keeps trust changes with the human: a Claude session's

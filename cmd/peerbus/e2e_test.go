@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/ed25519"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,63 +10,108 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/vitaminmoo/peerbus/internal/identity"
 )
 
-// TestEndToEnd builds the binary, runs `peerbus init`, then drives two
-// `peerbus channel` processes over MCP stdio the way Claude Code does. The
-// first channel autostarts the broker.
+type user struct {
+	name  string
+	cfg   string
+	state string
+	env   []string
+	store identity.Store
+}
+
+func newUser(t *testing.T, dir, name, rv string) *user {
+	t.Helper()
+	u := &user{name: name, cfg: filepath.Join(dir, name, "config"), state: filepath.Join(dir, name, "state")}
+	u.store = identity.Store{Dir: u.cfg}
+	if _, err := u.store.Identity(); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.store.Update(func(p *identity.Peers) error { p.Self.Name = name; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(u.cfg, "client.json"), []byte(fmt.Sprintf(`{"rendezvous": %q, "stun": []}`, rv)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u.env = append(os.Environ(),
+		"PEERBUS_CONFIG_DIR="+u.cfg,
+		"PEERBUS_STATE_DIR="+u.state,
+		"CLAUDE_CONFIG_DIR="+filepath.Join(dir, name, "claude"),
+	)
+	return u
+}
+
+func pairUsers(t *testing.T, a, b *user) {
+	t.Helper()
+	secret := identity.NewSecret()
+	add := func(s identity.Store, other *user) {
+		k, err := other.store.Identity()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.Update(func(p *identity.Peers) error {
+			p.Peers = append(p.Peers, &identity.Peer{Name: other.name, Key: identity.Key(k.Public().(ed25519.PublicKey)), Secret: secret, Enabled: true, Perms: identity.DefaultPerms(), PairedAt: time.Now()})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(a.store, b)
+	add(b.store, a)
+}
+
+// TestEndToEnd builds the binary, runs a rendezvous server, and drives
+// `peerbus channel` processes over MCP stdio the way Claude Code does: two
+// sessions of alice on one "machine" and one of bob on another.
 func TestEndToEnd(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "peerbus")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	addr := ln.Addr().String()
-	ln.Close()
-	envv := append(os.Environ(),
-		"PEERBUS_CONFIG_DIR="+filepath.Join(dir, "config"),
-		"PEERBUS_STATE_DIR="+filepath.Join(dir, "state"),
-		"CLAUDE_CONFIG_DIR="+filepath.Join(dir, "claude"),
-	)
-	initCmd := exec.Command(bin, "init", "-user", "alice", "-listen", addr)
-	initCmd.Env = envv
-	if out, err := initCmd.CombinedOutput(); err != nil {
-		t.Fatalf("init: %v\n%s", err, out)
+	uc, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	rv := uc.LocalAddr().String()
+	uc.Close()
+	rvCmd := exec.Command(bin, "rendezvous", "-listen", rv)
+	rvCmd.Stderr = &prefixWriter{t: t, prefix: "rv"}
+	if err := rvCmd.Start(); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if b, err := os.ReadFile(filepath.Join(dir, "state", "broker.pid")); err == nil {
-			pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-			syscall.Kill(pid, syscall.SIGTERM)
-			// It saves state on the way out; let it finish before TempDir cleanup.
-			for i := 0; i < 50 && syscall.Kill(pid, 0) == nil; i++ {
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-	})
+	t.Cleanup(func() { rvCmd.Process.Kill(); rvCmd.Wait() })
 
-	one := startChannel(t, bin, envv, dir, "one", "aaaaaaaa-1111", "busy")
-	two := startChannel(t, bin, envv, dir, "two", "bbbbbbbb-2222", "idle")
+	alice := newUser(t, dir, "alice", rv)
+	bob := newUser(t, dir, "bob", rv)
+	pairUsers(t, alice, bob)
 
-	// Wait until both are connected (the first autostarted the broker).
+	one := startChannel(t, bin, alice, "one", "aaaaaaaa-1111", "busy")
+	two := startChannel(t, bin, alice, "two", "bbbbbbbb-2222", "idle")
+	b1 := startChannel(t, bin, bob, "bobsess", "cccccccc-3333", "idle")
+
 	var listing string
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 150; i++ {
 		listing = one.callText(t, "list_peers", map[string]any{})
-		if strings.Contains(listing, "alice/two#bbbbbb") {
+		if strings.Contains(listing, "alice/two#bbbbbb") && strings.Contains(listing, "bob/bobsess#cccccc") {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if !strings.Contains(listing, "This session is alice/one#aaaaaa") || !strings.Contains(listing, "alice/two#bbbbbb  idle") {
-		t.Fatalf("listing:\n%s", listing)
+	// Everyone is on this machine, so even bob is reached over loopback.
+	for _, want := range []string{"This session is alice/one#aaaaaa", "alice/two#bbbbbb  idle  host=", "via=local", "bob/bobsess#cccccc  idle"} {
+		if !strings.Contains(listing, want) {
+			t.Fatalf("listing lacks %q:\n%s", want, listing)
+		}
+	}
+	if strings.Contains(listing, "cwd="+bob.state) {
+		t.Fatalf("bob's details leaked:\n%s", listing)
 	}
 
-	// Send one -> two, which arrives as a channel notification.
+	// one -> two arrives as a channel notification.
 	out := one.callText(t, "send", map[string]any{"to": "two", "text": "build is green\nmerged #42"})
 	if !strings.HasPrefix(out, "Delivered to alice/two#bbbbbb") {
 		t.Fatalf("send: %s", out)
@@ -75,8 +121,6 @@ func TestEndToEnd(t *testing.T) {
 	if n.Params.Content != "build is green\nmerged #42" || meta["from"] != "alice/one#aaaaaa" || meta["foreign"] != "false" || meta["kind"] != "message" {
 		t.Fatalf("bad notification %+v", n)
 	}
-
-	// Reply on the thread.
 	two.callText(t, "send", map[string]any{"to": meta["from"], "text": "thanks", "thread": meta["thread"]})
 	if r := one.notification(t); r.Params.Content != "thanks" || r.Params.Meta["thread"] != meta["thread"] {
 		t.Fatalf("bad reply %+v", r)
@@ -86,23 +130,88 @@ func TestEndToEnd(t *testing.T) {
 	if out := two.callText(t, "subscribe_idle", map[string]any{"peer": "one"}); !strings.HasPrefix(out, "Subscribed") {
 		t.Fatalf("subscribe: %s", out)
 	}
-	writeRegistry(t, dir, "one", "aaaaaaaa-1111", "idle")
-	if r := two.notification(t); r.Params.Meta["kind"] != "idle" {
+	writeRegistry(t, alice, "one", "aaaaaaaa-1111", "idle")
+	if r := two.notification(t); r.Params.Meta["kind"] != "idle" || r.Params.Meta["state"] != "idle" {
 		t.Fatalf("bad idle notice %+v", r)
 	}
 
 	// Renaming in the registry shows up for peers.
-	writeRegistryName(t, dir, "one", "aaaaaaaa-1111", "renamed", "idle")
+	writeRegistryName(t, alice, "one", "aaaaaaaa-1111", "renamed", "idle")
 	time.Sleep(800 * time.Millisecond)
 	if l := two.callText(t, "list_peers", map[string]any{}); !strings.Contains(l, "alice/renamed#aaaaaa") {
 		t.Fatalf("rename not visible:\n%s", l)
 	}
 
+	// bob -> alice is held: alice's session hears that something waits, the
+	// text stays in her inbox for the CLI.
+	for i := 0; i < 150; i++ {
+		if l := b1.callText(t, "list_peers", map[string]any{}); strings.Contains(l, "alice/two#bbbbbb") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	out = b1.callText(t, "send", map[string]any{"to": "alice/two", "text": "can I borrow ghidra?"})
+	if !strings.HasPrefix(out, "Held for approval") {
+		t.Fatalf("send to alice: %s", out)
+	}
+	h := two.notification(t)
+	if h.Params.Meta["kind"] != "held" || strings.Contains(h.Params.Content, "ghidra") || h.Params.Meta["from"] != "bob/bobsess#cccccc" {
+		t.Fatalf("held notice: %+v", h)
+	}
+	inboxCmd := exec.Command(bin, "inbox")
+	inboxCmd.Env = alice.env
+	if ib, err := inboxCmd.CombinedOutput(); err != nil || !strings.Contains(string(ib), "from bob/bobsess#cccccc") || !strings.Contains(string(ib), "can I borrow ghidra?") {
+		t.Fatalf("inbox: %v\n%s", err, ib)
+	}
+
 	// The CLI can't approve without a terminal.
-	approve := exec.Command(bin, "approve", "deadbeef")
-	approve.Env = envv
+	approve := exec.Command(bin, "approve", h.Params.Meta["held_id"])
+	approve.Env = alice.env
 	if out, err := approve.CombinedOutput(); err == nil || !strings.Contains(string(out), "interactively") {
 		t.Fatalf("approve without a tty: %v %s", err, out)
+	}
+
+	// alice lets bob through; the running sessions pick it up.
+	if err := alice.store.Update(func(p *identity.Peers) error { p.ByName("bob").Perms.Deliver = "auto"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var delivered bool
+	for i := 0; i < 30 && !delivered; i++ {
+		out = b1.callText(t, "send", map[string]any{"to": "alice/two", "text": "ping"})
+		delivered = strings.HasPrefix(out, "Delivered to alice/two")
+		if !delivered {
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+	if !delivered {
+		t.Fatalf("after deliver=auto: %s", out)
+	}
+	// Attempts made before the reload landed left held notices; skip them.
+	for {
+		r := two.notification(t)
+		if r.Params.Meta["kind"] == "held" {
+			continue
+		}
+		if r.Params.Content != "ping" || r.Params.Meta["foreign"] != "true" || r.Params.Meta["from"] != "bob/bobsess#cccccc" {
+			t.Fatalf("foreign delivery: %+v", r)
+		}
+		break
+	}
+
+	// The CLI sees the same world.
+	peersCmd := exec.Command(bin, "peers")
+	peersCmd.Env = alice.env
+	pb, err := peersCmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(pb), "alice/renamed#aaaaaa") || !strings.Contains(string(pb), "bob/bobsess#cccccc") {
+		t.Fatalf("peers: %v\n%s", err, pb)
+	}
+	sendCmd := exec.Command(bin, "send", "two", "from the shell")
+	sendCmd.Env = alice.env
+	if sb, err := sendCmd.CombinedOutput(); err != nil || !strings.Contains(string(sb), "Delivered to alice/two") {
+		t.Fatalf("cli send: %v\n%s", err, sb)
+	}
+	if r := two.notification(t); r.Params.Content != "from the shell" || r.Params.Meta["from"] != "alice/cli" {
+		t.Fatalf("cli delivery: %+v", r)
 	}
 }
 
@@ -127,25 +236,26 @@ type rpc struct {
 	} `json:"params"`
 }
 
-func writeRegistry(t *testing.T, dir, name, sid, status string) {
-	writeRegistryName(t, dir, name, sid, name, status)
+func writeRegistry(t *testing.T, u *user, name, sid, status string) {
+	writeRegistryName(t, u, name, sid, name, status)
 }
 
-func writeRegistryName(t *testing.T, dir, file, sid, name, status string) {
+func writeRegistryName(t *testing.T, u *user, file, sid, name, status string) {
 	t.Helper()
-	b, _ := json.Marshal(map[string]any{"pid": 1, "sessionId": sid, "cwd": dir, "name": name, "status": status})
-	path := filepath.Join(dir, file+".registry.json")
+	b, _ := json.Marshal(map[string]any{"pid": 1, "sessionId": sid, "cwd": u.state, "name": name, "status": status})
+	path := filepath.Join(u.state, file+".registry.json")
+	os.MkdirAll(u.state, 0o700)
 	if err := os.WriteFile(path+".tmp", b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	os.Rename(path+".tmp", path)
 }
 
-func startChannel(t *testing.T, bin string, envv []string, dir, name, sid, status string) *channelProc {
+func startChannel(t *testing.T, bin string, u *user, name, sid, status string) *channelProc {
 	t.Helper()
-	writeRegistry(t, dir, name, sid, status)
+	writeRegistry(t, u, name, sid, status)
 	cmd := exec.Command(bin, "channel")
-	cmd.Env = append(envv, "PEERBUS_REGISTRY_FILE="+filepath.Join(dir, name+".registry.json"))
+	cmd.Env = append(u.env, "PEERBUS_REGISTRY_FILE="+filepath.Join(u.state, name+".registry.json"))
 	in, _ := cmd.StdinPipe()
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = &prefixWriter{t: t, prefix: name}
@@ -199,7 +309,7 @@ func (p *channelProc) call(t *testing.T, method string, params any) json.RawMess
 			t.Fatalf("%s: %s", method, r.Error.Message)
 		}
 		return r.Result
-	case <-time.After(20 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatalf("%s: no response", method)
 	}
 	return nil
@@ -215,7 +325,7 @@ func (p *channelProc) callText(t *testing.T, tool string, args map[string]any) s
 	if len(res.Content) == 0 {
 		t.Fatalf("%s: empty result", tool)
 	}
-	if res.IsError && tool != "list_peers" {
+	if res.IsError && tool != "list_peers" && tool != "send" {
 		t.Fatalf("%s error: %s", tool, res.Content[0].Text)
 	}
 	return res.Content[0].Text
@@ -229,7 +339,7 @@ func (p *channelProc) notification(t *testing.T) rpc {
 			t.Fatalf("unexpected notification %s", n.Method)
 		}
 		return n
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("no channel notification")
 	}
 	return rpc{}
