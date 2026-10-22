@@ -7,9 +7,6 @@
   --link: #1f5fa8;
   --note-bg: #fff6dc;
   --note-rule: #e8cf86;
-  --lane-a: #1f5fa8;
-  --lane-b: #2f7d4f;
-  --lane-f: #b0601a;
   --arrow: #8a8478;
   color-scheme: light dark;
 }
@@ -24,9 +21,6 @@
     --link: #8ab4f0;
     --note-bg: #2a2516;
     --note-rule: #5c4f25;
-    --lane-a: #8ab4f0;
-    --lane-b: #7cc79a;
-    --lane-f: #e9a86a;
     --arrow: #77736b;
   }
 }
@@ -131,86 +125,101 @@ h3 {
   margin: 2rem 0 .5rem;
 }
 
-/* Sequence diagram: one column per machine or person, time running down. */
+/* Pairing diagram: three terminals side by side, time running down, with
+   arrows in the gutters for what passes between them. The first machine is
+   in the middle because both of the others pair with it. Terminals stay
+   dark in both themes. */
 
 .seq {
+  --term-bg: #1c1e22;
+  --term-bar: #2a2d33;
+  --term-edge: #34373e;
+  --term-fg: #d9d6cf;
+  --term-dim: #8c919a;
+  --term-prompt: #8fcf7c;
+  --gutter: 8.5rem;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-auto-rows: auto;
-  margin: 1.5rem 0 2rem;
-  font-size: .9rem;
-  line-height: 1.4;
+  grid-template-columns: minmax(0, 1fr) var(--gutter) minmax(0, 1fr) var(--gutter) minmax(0, 1fr);
+  width: min(88rem, calc(100vw - 2rem));
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 1.75rem 0 2.25rem;
 }
 
-.seq .a { grid-column: 1; --c: var(--lane-a); }
-.seq .b { grid-column: 2; --c: var(--lane-b); }
-.seq .f { grid-column: 3; --c: var(--lane-f); }
+.seq .b { grid-column: 1; --c: #7cc79a; }
+.seq .a { grid-column: 3; --c: #8ab4f0; }
+.seq .f { grid-column: 5; --c: #e9a86a; }
+.seq .g1 { grid-column: 2; }
+.seq .g2 { grid-column: 4; }
 
-.seq .lane, .seq .step, .seq .msg { grid-row: var(--r); }
+.seq .bar, .seq .t, .seq .msg { grid-row: var(--r); }
 
-.seq .life {
-  grid-row: var(--from) / 17;
-  justify-self: center;
-  width: 0;
-  border-left: 2px solid var(--c);
-  opacity: .35;
+.seq .term {
+  grid-row: var(--from) / var(--to);
+  background: var(--term-bg);
+  border: 1px solid var(--term-edge);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / .18);
 }
 
-.seq .lane {
-  justify-self: center;
-  align-self: end;
+.seq .bar {
   z-index: 1;
-  padding: .15rem .6rem;
-  margin-top: .5rem;
-  border: 1.5px solid var(--c);
-  border-radius: 999px;
-  background: var(--bg);
+  margin: 1px 1px 0;
+  padding: .35rem .7rem .35rem 3.4rem;
+  border-radius: 7px 7px 0 0;
+  background:
+    radial-gradient(circle, #ec6a5e 4px, transparent 4.5px) .6rem 50% / 12px 12px no-repeat,
+    radial-gradient(circle, #f4bf4f 4px, transparent 4.5px) 1.45rem 50% / 12px 12px no-repeat,
+    radial-gradient(circle, #61c554 4px, transparent 4.5px) 2.3rem 50% / 12px 12px no-repeat,
+    var(--term-bar);
   color: var(--c);
-  font-weight: 600;
-  font-size: .85rem;
+  font: 600 .74rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  text-align: center;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.seq .step {
+.seq pre.t {
   z-index: 1;
-  margin: .4rem .35rem;
-  padding: .5rem .65rem;
-  background: var(--bg);
-  border: 1px solid var(--rule);
-  border-top: 3px solid var(--c);
-  border-radius: 5px;
+  margin: 0;
+  padding: .55rem .9rem .35rem;
+  background: none;
+  border-radius: 0;
+  color: var(--term-fg);
+  font-size: .74rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
 }
 
-.seq .step p { margin: .15rem 0; }
-.seq .step code { font-size: .85em; overflow-wrap: anywhere; }
-.seq .step.later { border-style: dashed; border-top-style: solid; color: var(--muted); }
+.seq .t .c { color: var(--term-dim); font-style: italic; }
+.seq .t .p { color: var(--term-prompt); }
+
+.seq .secret {
+  color: #c9a6f2;
+  text-shadow: 0 0 6px rgb(201 166 242 / .55);
+}
 
 .seq .msg {
   position: relative;
   z-index: 1;
-  padding: .1rem 0 .9rem;
+  align-self: center;
+  padding: .3rem .45rem 1.05rem;
   text-align: center;
   color: var(--muted);
-  font-size: .8rem;
-  --inset: 25%;
-}
-
-.seq .msg.ab, .seq .msg.ba { grid-column: 1 / 3; }
-.seq .msg.af, .seq .msg.fa { grid-column: 1 / 4; --inset: 16.667%; }
-
-.seq .msg span {
-  display: inline-block;
-  max-width: calc(100% - 2 * var(--inset));
-  padding: 0 .4rem;
-  background: var(--bg);
+  font-size: .74rem;
+  line-height: 1.3;
 }
 
 /* the line */
 .seq .msg::before {
   content: "";
   position: absolute;
-  left: var(--inset);
-  right: var(--inset);
+  left: 0;
+  right: 0;
   bottom: .55rem;
   border-top: 1.5px solid var(--arrow);
 }
@@ -222,26 +231,30 @@ h3 {
   bottom: calc(.55rem - 4.25px);
   border: 5px solid transparent;
 }
-.seq .msg.ab::after, .seq .msg.af::after { right: var(--inset); border-right: 0; border-left: 8px solid var(--arrow); }
-.seq .msg.ba::after, .seq .msg.fa::after { left: var(--inset); border-left: 0; border-right: 8px solid var(--arrow); }
+.seq .msg.to-r::after { right: 0; border-right: 0; border-left: 8px solid var(--arrow); }
+.seq .msg.to-l::after { left: 0; border-left: 0; border-right: 8px solid var(--arrow); }
 
-@media (max-width: 40rem) {
-  .seq { display: block; }
-  .seq .life, .seq .lane { display: none; }
-  .seq .step { margin: .5rem 0; }
-  .seq .step.b { margin-left: 1rem; }
-  .seq .step.f { margin-left: 2rem; }
-  .seq .step::before {
+/* Too narrow for three terminals: stack the steps in time order, each
+   labelled with whose terminal it is. */
+@media (max-width: 72rem) {
+  .seq { display: block; width: auto; left: auto; transform: none; }
+  .seq .term, .seq .bar { display: none; }
+  .seq pre.t {
+    margin: .5rem 0;
+    padding: .6rem .9rem;
+    background: var(--term-bg);
+    border-radius: 6px;
+  }
+  .seq pre.t::before {
     content: attr(data-lane);
     display: block;
+    margin-bottom: .3rem;
     color: var(--c);
-    font-weight: 600;
-    font-size: .8rem;
+    font: 600 .74rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   .seq .msg { padding: 0 0 0 1rem; text-align: left; }
   .seq .msg::after { content: none; }
-  .seq .msg::before { content: attr(data-from) " → " attr(data-to) ": "; position: static; border: 0; }
-  .seq .msg span { display: inline; max-width: none; padding: 0; }
+  .seq .msg::before { content: "↓ " attr(data-from) " → " attr(data-to) ": "; position: static; border: 0; }
 }
 
 dt { margin-top: .8rem; }

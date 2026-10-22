@@ -80,48 +80,82 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus chann
 
 <h2 id="devices">Your machines and friends</h2>
 
-<p>Your machines share one identity, so friends pair with you once rather than once per machine. Here's a second machine joining, then a friend, with time running down the page:</p>
+<p>Your machines share one identity, so friends pair with you once rather than once per machine. Here's a second machine joining, then a friend: three terminals, with time running down the page and arrows for what passes between them.</p>
 
-<div class="seq" role="group" aria-label="Pairing a second machine, then a friend">
-  <div class="life a" style="--from:2"></div>
-  <div class="life b" style="--from:4"></div>
-  <div class="life f" style="--from:11"></div>
+<div class="seq" role="group" aria-label="Three terminals: your first machine invites a new machine, then a friend">
+  <div class="term a" style="--from:1;--to:14"></div>
+  <div class="term b" style="--from:3;--to:14"></div>
+  <div class="term f" style="--from:9;--to:14"></div>
 
-  <div class="lane a" style="--r:1">Your first machine</div>
-  <div class="step a" data-lane="Your first machine" style="--r:2">
-    <code>peerbus id -name yourname</code>
-    <p>Already set up as in <a href="#machine">one machine</a>. Then:</p>
-    <code>peerbus invite -self</code>
-    <p>Prints a code and waits.</p>
-  </div>
+  <div class="bar a" style="--r:1">your first machine</div>
+<pre class="t a" data-lane="your first machine" style="--r:2"><span class="c"># Name yourself once. Everything else on
+# one machine needs no setup.</span>
+<span class="p">$</span> peerbus id -name yourname
+Identity:    3f9a 1c02 77de b415
+Name:        yourname
+Store:       /home/you/.config/peerbus
+Peers:       0 (0 enabled)
 
-  <div class="lane b" style="--r:3">A new machine</div>
-  <div class="step b" data-lane="A new machine" style="--r:4"><p>Install peerbus.</p></div>
-  <div class="msg ab" data-from="first machine" data-to="new machine" style="--r:5"><span>the code, copied by you</span></div>
-  <div class="step b" data-lane="A new machine" style="--r:6">
-    <code>peerbus pair pb1-…</code>
-    <p>Asks before taking your identity.</p>
-  </div>
-  <div class="msg ba" data-from="new machine" data-to="first machine" style="--r:7"><span>meets it via rv.peerb.us, proves it has the code</span></div>
-  <div class="msg ab" data-from="first machine" data-to="new machine" style="--r:8"><span>your identity key and peer list</span></div>
+<span class="c"># Invite another machine of yours. This one
+# waits at a meeting point only the code
+# knows.</span>
+<span class="p">$</span> peerbus invite -self
+On your other device, run (valid until 20:56, single use):
 
-  <div class="step a" data-lane="Your first machine" style="--r:9"><p>“Your other device is paired.”</p></div>
-  <div class="step b" data-lane="A new machine" style="--r:9"><p>“This machine is now one of your devices.”</p></div>
+  peerbus pair pb1-<span class="secret" aria-label="a secret code">░▒▓█▓▒░▒▓█▓▒░▒</span>
 
-  <div class="lane f" style="--r:10">A friend</div>
-  <div class="step a" data-lane="Your first machine" style="--r:11">
-    <code>peerbus invite</code>
-    <p>Prints a code and waits.</p>
-  </div>
-  <div class="step f" data-lane="A friend" style="--r:11"><p>Installs peerbus.</p></div>
-  <div class="msg af" data-from="you" data-to="friend" style="--r:12"><span>the code, sent somewhere private</span></div>
-  <div class="step f" data-lane="A friend" style="--r:13"><code>peerbus pair pb1-…</code></div>
-  <div class="msg fa" data-from="friend" data-to="first machine" style="--r:14"><span>meets you via rv.peerb.us, proves it has the code</span></div>
-  <div class="msg af" data-from="first machine" data-to="friend" style="--r:15"><span>a fresh secret for the two of you</span></div>
+That device will get your identity key and your whole peer list.
+Waiting for them... (Ctrl-C to cancel)</pre>
 
-  <div class="step a" data-lane="Your first machine" style="--r:16"><p>“Paired with "alice", fingerprint …”</p></div>
-  <div class="step b later" data-lane="A new machine" style="--r:16"><p>Doesn't know alice yet. <a href="#friends">Re-pair</a> to copy the new peer list.</p></div>
-  <div class="step f" data-lane="A friend" style="--r:16"><p>“Paired with "yourname", fingerprint …”</p></div>
+  <div class="bar b" style="--r:3">a new machine</div>
+  <div class="msg g1 to-l" data-from="first machine" data-to="new machine" style="--r:3"><span>the code, copied by you</span></div>
+<pre class="t b" data-lane="a new machine" style="--r:4"><span class="c"># Install, then redeem the code. This
+# machine becomes you.</span>
+<span class="p">$</span> go install github.com/vitaminmoo/peerbus/cmd/peerbus@latest
+<span class="p">$</span> peerbus pair pb1-<span class="secret" aria-label="a secret code">░▒▓█▓▒░▒▓█▓▒░▒</span>
+This invite makes this machine one of the inviter's own devices: it takes their identity and peer list.
+Continue? [y/N] y
+Pairing...</pre>
+  <div class="msg g1 to-r" data-from="new machine" data-to="first machine" style="--r:5"><span>finds it via rv.peerb.us, proves it has the code</span></div>
+  <div class="msg g1 to-l" data-from="first machine" data-to="new machine" style="--r:6"><span>your identity key and peer list</span></div>
+<pre class="t a" data-lane="your first machine" style="--r:7">
+Your other device is paired.</pre>
+<pre class="t b" data-lane="a new machine" style="--r:7">This machine is now one of your devices.</pre>
+
+<pre class="t a" data-lane="your first machine" style="--r:8">
+<span class="c"># Invite a friend. Send the code somewhere
+# private: whoever redeems it first is
+# who you've paired with.</span>
+<span class="p">$</span> peerbus invite
+Send this to them (valid until 21:12, single use):
+
+  peerbus pair pb1-<span class="secret" aria-label="a secret code">░▒▓█▓▒░▒▓█▓▒░▒</span>
+
+Anyone holding the code can pair as them until it's used, so send it somewhere private.
+Waiting for them... (Ctrl-C to cancel)</pre>
+
+  <div class="bar f" style="--r:9">a friend's machine</div>
+  <div class="msg g2 to-r" data-from="you" data-to="friend" style="--r:9"><span>the code, sent somewhere private</span></div>
+<pre class="t f" data-lane="a friend's machine" style="--r:10"><span class="c"># After installing peerbus themselves.</span>
+<span class="p">$</span> peerbus pair pb1-<span class="secret" aria-label="a secret code">░▒▓█▓▒░▒▓█▓▒░▒</span>
+Pairing...</pre>
+  <div class="msg g2 to-l" data-from="friend" data-to="first machine" style="--r:11"><span>finds you via rv.peerb.us, proves it has the code</span></div>
+  <div class="msg g2 to-r" data-from="first machine" data-to="friend" style="--r:12"><span>a fresh secret for the two of you</span></div>
+
+<pre class="t a" data-lane="your first machine" style="--r:13">
+Paired with "alice", fingerprint 8c41 e0d7 52aa 9b36.
+Their messages are held for your approval until you change it: peerbus peer set alice deliver=auto
+
+<span class="c"># Compare fingerprints with alice some
+# other way to be sure.</span></pre>
+<pre class="t b" data-lane="a new machine" style="--r:13">
+<span class="c"># This machine copied the peer list before
+# alice was paired, so it can't reach
+# alice yet. Re-pair to catch it up.</span>
+<span class="p">$</span> peerbus peer list
+No peers yet. Pair with: peerbus invite</pre>
+<pre class="t f" data-lane="a friend's machine" style="--r:13">Paired with "yourname", fingerprint 3f9a 1c02 77de b415.
+Their messages are held for your approval until you change it: peerbus peer set yourname deliver=auto</pre>
 </div>
 
 <h3>Your machines</h3>
@@ -247,5 +281,20 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
 </footer>
 
 </main>
+<script>
+// Invite codes in the diagram shimmer like a secret you haven't learned yet.
+(() => {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const abc = "abcdefghijklmnopqrstuvwxyz234567";
+  const els = document.querySelectorAll(".secret");
+  setInterval(() => {
+    for (const el of els) {
+      let t = "";
+      for (let i = 0; i < 14; i++) t += abc[Math.random() * abc.length | 0];
+      el.textContent = t;
+    }
+  }, 90);
+})();
+</script>
 </body>
 </html>
