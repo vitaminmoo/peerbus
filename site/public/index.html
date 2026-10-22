@@ -369,7 +369,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
         f, t: 0,
         speed: .22 + Math.random() * .18,
         // how far each particle's path bows out, either side of the line
-        bow: (Math.random() - .5) * 260, nx: -dy / len, ny: dx / len,
+        bow: (Math.random() - .5) * 150, nx: -dy / len, ny: dx / len,
         wob: Math.random() * Math.PI * 2,
         g: glyphs[Math.random() * glyphs.length | 0],
         px: f.a.x, py: f.a.y,
@@ -379,7 +379,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
       if (!running) return;
       const dt = Math.min(.05, (now - last) / 1000 || 0);
       last = now;
-      for (const f of flows) if (Math.random() < 1.4 * dt * 30) spawn(f);
+      for (const f of flows) if (Math.random() < 10 * dt) spawn(f); // about 10 a second
       ctx.clearRect(0, 0, ether.width, ether.height);
       ctx.font = "11px ui-monospace, Menlo, Consolas, monospace";
       ctx.textAlign = "center";
@@ -393,18 +393,18 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
         // easing in: slow to leave, then pulled in fast
         const e = p.t * p.t * (3 - 2 * p.t) * .35 + Math.pow(p.t, 2.2) * .65;
         const bow = Math.sin(e * Math.PI) * p.bow;
-        const wob = Math.sin(now / 260 + p.wob) * 9 * (1 - e);
+        const wob = Math.sin(now / 260 + p.wob) * 6 * (1 - e);
         const x = p.f.a.x + (p.f.b.x - p.f.a.x) * e + p.nx * (bow + wob);
         const y = p.f.a.y + (p.f.b.y - p.f.a.y) * e + p.ny * (bow + wob);
-        const alpha = Math.min(1, p.t * 8) * Math.min(1, (1 - p.t) * 5);
-        ctx.strokeStyle = `rgba(127, 233, 210, ${.35 * alpha})`;
-        ctx.lineWidth = 1.5;
+        const alpha = .55 * Math.min(1, p.t * 8) * Math.min(1, (1 - p.t) * 5);
+        ctx.strokeStyle = `rgba(127, 233, 210, ${.3 * alpha})`;
+        ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(p.px, p.py);
         ctx.lineTo(x, y);
         ctx.stroke();
-        ctx.shadowColor = "rgba(127, 233, 210, .9)";
-        ctx.shadowBlur = 8;
+        ctx.shadowColor = "rgba(127, 233, 210, .6)";
+        ctx.shadowBlur = 5;
         ctx.fillStyle = `rgba(190, 255, 240, ${alpha})`;
         if (Math.random() < .04) p.g = glyphs[Math.random() * glyphs.length | 0];
         ctx.fillText(p.g, x, y);
