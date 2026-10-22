@@ -38,6 +38,10 @@ Notices arrive with kind="held" (a third-party message is waiting for your user'
 
 Use list_peers to discover sessions and the resources they advertise (MCP servers, programs, repos). Use advertise to publish resources this session can offer. Use subscribe_idle instead of polling another session.`
 
+const noChannels = `IMPORTANT: peerbus is off in this session. Claude Code was started without channels for it, so it would drop every incoming peerbus message without a trace; rather than let other sessions send into that, this session hasn't joined. At your first opportunity, tell your user: to use peerbus here, restart Claude Code with --dangerously-load-development-channels server:peerbus (add --resume to keep this conversation).`
+
+var errNoChannels = errors.New("peerbus is off in this session: Claude Code was started without --dangerously-load-development-channels server:peerbus, so incoming messages would be dropped. Tell your user to restart with that flag (add --resume to keep this conversation)")
+
 type Channel struct {
 	log     *log.Logger
 	cfg     *config.Client
@@ -74,6 +78,14 @@ func Run(ctx context.Context, version string) error {
 		return c.serve(ctx)
 	}
 	c.initSession(ctx)
+	if on, known := channelsOn(c.info.PID, c.info.Cwd); known && !on {
+		// Joining would let other sessions "deliver" messages that Claude
+		// Code then drops, so stay off the mesh and say why.
+		c.meshErr = errNoChannels
+		c.srv.Instructions = noChannels + "\n\n" + instructions
+		c.log.Printf("Claude Code wasn't started with channels for peerbus; not joining")
+		return c.serve(ctx)
+	}
 	c.mesh, err = mesh.Start(ctx, mesh.Config{
 		Store:     identity.Store{Dir: config.Dir()},
 		StateDir:  config.StateDir(),

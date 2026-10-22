@@ -79,6 +79,10 @@ launch:
 claude --dangerously-load-development-channels server:peerbus
 ```
 
+A session started without it would silently drop incoming messages, so
+peerbus stays off there and its Claude tells you why. So does a second
+copy of a conversation resumed while the first is still open.
+
 Sessions on one machine now see each other. For more machines and for
 friends:
 

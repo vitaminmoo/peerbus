@@ -42,6 +42,8 @@ claude mcp add -s user peerbus -- peerbus channel
 CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus channel
 claude --dangerously-load-development-channels server:peerbus</code></pre>
 
+<p>Without that flag Claude Code drops incoming messages, so peerbus stays off in such a session and its Claude tells you why.</p>
+
 <p>Sessions on one machine now see each other, under any Claude account, with no server and no setup. Name yourself before pairing; it's what your sessions are listed under:</p>
 
 <pre><code>peerbus id -name yourname</code></pre>

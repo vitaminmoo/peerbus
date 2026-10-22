@@ -100,6 +100,61 @@ func waitRegistry(ctx context.Context, d time.Duration) string {
 	}
 }
 
+// channelsOn reports whether the Claude Code process pid was started with
+// this server among its channels (--channels or
+// --dangerously-load-development-channels server:<name>, where <name> runs
+// peerbus). Claude Code doesn't tell an MCP server whether it listens for
+// its notifications, and without the flag it silently drops them, so the
+// command line is the only way to know. known is false when it can't be
+// read.
+func channelsOn(pid int, cwd string) (on, known bool) {
+	if pid <= 0 {
+		return false, false
+	}
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return false, false
+	}
+	specs := channelSpecs(strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"))
+	names := map[string]bool{"peerbus": true}
+	for n, e := range mcpConfig(cwd) {
+		if filepath.Base(e.Command) == "peerbus" {
+			names[n] = true
+		}
+	}
+	for _, s := range specs {
+		for _, f := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' }) {
+			if n, ok := strings.CutPrefix(f, "server:"); ok && names[n] {
+				return true, true
+			}
+		}
+	}
+	return false, true
+}
+
+// channelSpecs collects the values of --channels and
+// --dangerously-load-development-channels from a command line: each takes
+// the arguments after it up to the next flag, or one value after "=".
+func channelSpecs(args []string) []string {
+	var specs []string
+	in := false
+	for _, a := range args {
+		flag, val, hasVal := strings.Cut(a, "=")
+		switch {
+		case flag == "--channels" || flag == "--dangerously-load-development-channels":
+			in = !hasVal
+			if hasVal {
+				specs = append(specs, val)
+			}
+		case strings.HasPrefix(a, "-"):
+			in = false
+		case in:
+			specs = append(specs, a)
+		}
+	}
+	return specs
+}
+
 func readRegistry(path string) (registry, bool) {
 	var r registry
 	b, err := os.ReadFile(path)

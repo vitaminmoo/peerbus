@@ -66,14 +66,30 @@ func gitResource(cwd string) (proto.Resource, bool) {
 // mcpServers lists MCP server names configured at user scope, for this
 // project in .claude.json, and in the project's .mcp.json.
 func mcpServers(cwd string) []string {
-	type servers struct {
-		MCPServers map[string]json.RawMessage `json:"mcpServers"`
-	}
 	var names []string
+	for n := range mcpConfig(cwd) {
+		if n != "peerbus" {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+type mcpEntry struct {
+	Command string `json:"command"`
+}
+
+// mcpConfig is every MCP server Claude Code would start in cwd, by name.
+func mcpConfig(cwd string) map[string]mcpEntry {
+	type servers struct {
+		MCPServers map[string]mcpEntry `json:"mcpServers"`
+	}
+	out := map[string]mcpEntry{}
 	add := func(s servers) {
-		for n := range s.MCPServers {
-			if n != "peerbus" && !slices.Contains(names, n) {
-				names = append(names, n)
+		for n, e := range s.MCPServers {
+			if _, ok := out[n]; !ok {
+				out[n] = e
 			}
 		}
 	}
@@ -89,6 +105,5 @@ func mcpServers(cwd string) []string {
 	if b, err := os.ReadFile(filepath.Join(cwd, ".mcp.json")); err == nil && json.Unmarshal(b, &pj) == nil {
 		add(pj)
 	}
-	slices.Sort(names)
-	return names
+	return out
 }
