@@ -98,9 +98,18 @@ const (
 	TPeers = "peers"
 
 	// From the CLI to a session on this machine only.
-	TList    = "list"
+	TList = "list"
+
+	// From your own CLI or TUI, on any of your machines, to a session:
+	// list, approve or deny that machine's held messages. Approve may name
+	// another of your sessions (To, a session id) to deliver to.
+	TInbox   = "inbox"
 	TApprove = "approve"
 	TDeny    = "deny"
+
+	// Between your own sessions: a held message, approved and handed to the
+	// session it was routed to. Data is the held message.
+	TDeliver = "deliver"
 )
 
 // Hello kinds.
@@ -160,8 +169,18 @@ type HeldView struct {
 	From     string `json:"from"`
 	To       string `json:"to"`
 	Thread   string `json:"thread"`
-	Routed   bool   `json:"routed"`   // sent to you as a person; you pick the session
-	Outbound bool   `json:"outbound"` // yours, waiting for your own go-ahead
+	Peer     string `json:"peer"`             // our name for the other person
+	Target   string `json:"target,omitempty"` // session id it's for (inbound) or from (outbound)
+	Routed   bool   `json:"routed"`           // sent to you as a person; you pick the session
+	Outbound bool   `json:"outbound"`         // yours, waiting for your own go-ahead
 	HeldAt   int64  `json:"heldAt"`
 	Text     string `json:"text"`
+}
+
+// InboxView is one machine's held messages, as a session there reports
+// them to your own control clients.
+type InboxView struct {
+	Machine string     `json:"machine"` // its name
+	InboxID string     `json:"inboxId"` // the same from every session sharing this inbox
+	Held    []HeldView `json:"held"`
 }

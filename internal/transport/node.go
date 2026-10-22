@@ -102,7 +102,7 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		cfg:     cfg,
 		log:     cfg.Log,
 		regKey:  make([]byte, 32),
-		machine: machineID(),
+		machine: MachineID(),
 		regOK:   make(chan struct{}),
 		reqs:    map[uint32]chan ctl{},
 		punches: map[Handle]*punch{},
@@ -154,7 +154,8 @@ func quicConf(relayed bool) *quic.Config {
 	}
 }
 
-func machineID() string {
+// MachineID identifies this machine, the same for every process on it.
+func MachineID() string {
 	b, err := os.ReadFile("/etc/machine-id")
 	if err != nil {
 		h, _ := os.Hostname()

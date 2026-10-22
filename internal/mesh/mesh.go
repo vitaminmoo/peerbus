@@ -656,6 +656,24 @@ func via(path string) string {
 	}
 }
 
+// Own are the connected sessions of ours, on every machine.
+func (m *Mesh) Own() []*Link {
+	m.mu.Lock()
+	links := m.snapshot()
+	m.mu.Unlock()
+	var out []*Link
+	for _, l := range links {
+		l.mu.Lock()
+		ok := l.peer == nil && l.kind == proto.KindSession
+		l.mu.Unlock()
+		if ok {
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return m.addr(out[i]) < m.addr(out[j]) })
+	return out
+}
+
 // Locals are the connected sessions that run on this machine under our
 // identity: what the CLI talks to.
 func (m *Mesh) Locals() []*Link {

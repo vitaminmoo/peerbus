@@ -474,3 +474,76 @@ func TestPeersSyncAcrossOwnMachines(t *testing.T) {
 		return ps.ByName("bob") == nil && !sees(a1, "bob/bobsess#b1b1b1")
 	})
 }
+
+func TestRemoteApproveAndRoute(t *testing.T) {
+	srv := server(t)
+	alice, bob := store(t, "alice"), store(t, "bob")
+	pair(t, alice, bob)
+	laptop := otherMachine(t, alice)
+	deskState := t.TempDir()
+
+	desk1, evDesk := start(t, alice, deskState, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"})
+	start(t, laptop, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "l1l1l1l1", Name: "notes", Host: "laptop", Status: "idle"})
+	b1, evB := start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
+	waitFor(t, "everyone to meet", func() bool {
+		return sees(b1, "alice/notes#l1l1l1") && sees(b1, "alice/ghidra#d1d1d1") && sees(desk1, "alice/notes#l1l1l1")
+	})
+
+	// Bob writes to alice's laptop session; it's held on the laptop.
+	res, err := b1.Send(context.Background(), "alice/notes", "can I borrow ghidra?", "")
+	if err != nil || res.Status != "held" {
+		t.Fatalf("send: %+v %v", res, err)
+	}
+
+	// A control client on the desk sees the laptop's inbox...
+	ctl, _ := start(t, alice, deskState, srv, proto.KindControl, proto.SessionInfo{SID: "ctl", Name: "tui", Host: "desk"})
+	var lapLink *Link
+	waitFor(t, "the tui to reach the laptop", func() bool {
+		for _, l := range ctl.Own() {
+			if l.Info().SID == "l1l1l1l1" {
+				lapLink = l
+			}
+		}
+		return lapLink != nil
+	})
+	var view proto.InboxView
+	if err := lapLink.Request(context.Background(), proto.Frame{Type: proto.TInbox}, &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.Machine != "laptop" || len(view.Held) != 1 || view.Held[0].Text != "can I borrow ghidra?" || view.Held[0].Target != "l1l1l1l1" {
+		t.Fatalf("inbox: %+v", view)
+	}
+
+	// ...and routes the message to the desk session instead.
+	var ar proto.SendResult
+	if err := lapLink.Request(context.Background(), proto.Frame{Type: proto.TApprove, ID: view.Held[0].ID, To: "d1d1d1d1"}, &ar); err != nil || ar.Status != "delivered" {
+		t.Fatalf("approve: %+v %v", ar, err)
+	}
+	m := evDesk.msg(t)
+	if m.Text != "can I borrow ghidra?" || m.FromUser != "bob!" || m.To != "alice/ghidra#d1d1d1" {
+		t.Fatalf("delivered: %+v", m)
+	}
+	if n := evB.notice(t, "status"); !strings.Contains(n.text, "approved") {
+		t.Fatalf("bob's notice: %s", n.text)
+	}
+
+	// The thread is open on the desk now: bob's follow-up goes straight in.
+	if r, err := b1.Send(context.Background(), "alice/ghidra", "thanks", m.Thread); err != nil || r.Status != "delivered" {
+		t.Fatalf("follow-up: %+v %v", r, err)
+	}
+	if f := evDesk.msg(t); f.Text != "thanks" {
+		t.Fatalf("follow-up: %+v", f)
+	}
+	if err := lapLink.Request(context.Background(), proto.Frame{Type: proto.TInbox}, &view); err != nil || len(view.Held) != 0 {
+		t.Fatalf("laptop inbox after: %+v %v", view, err)
+	}
+
+	// Sessions can't approve or deliver on their own say-so.
+	var sv proto.InboxView
+	if err := desk1.resolveLink(t, "notes").Request(context.Background(), proto.Frame{Type: proto.TInbox}, &sv); err == nil {
+		t.Fatal("a session listed another machine's inbox")
+	}
+	if err := b1.resolveLink(t, "alice/notes").Request(context.Background(), proto.Frame{Type: proto.TDeliver, Data: map[string]any{}}, nil); err == nil {
+		t.Fatal("a friend used deliver")
+	}
+}

@@ -398,7 +398,7 @@ func DescribeSend(res proto.SendResult) string {
 	case "held":
 		return fmt.Sprintf("Held for approval by the recipient's human (to %s, thread %s, message %s). A status notice arrives when they approve or decline it. Don't resend it.", res.To, res.Thread, res.ID)
 	case "ask":
-		return fmt.Sprintf("Waiting for your user's go-ahead: messages to %s need their approval. Tell your user; they can send it with `peerbus approve %s`. Don't resend it.", res.To, res.ID)
+		return fmt.Sprintf("Waiting for your user's go-ahead: messages to %s need their approval. Tell your user; they can send it from `peerbus tui` (or `peerbus approve %s`). Don't resend it.", res.To, res.ID)
 	}
 	return fmt.Sprintf("%s: %s (thread %s)", res.Status, res.To, res.Thread)
 }

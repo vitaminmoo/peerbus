@@ -26,6 +26,7 @@ import (
 	"github.com/vitaminmoo/peerbus/internal/mesh"
 	"github.com/vitaminmoo/peerbus/internal/proto"
 	"github.com/vitaminmoo/peerbus/internal/transport"
+	"github.com/vitaminmoo/peerbus/internal/tui"
 )
 
 const version = "0.2.0"
@@ -33,7 +34,7 @@ const version = "0.2.0"
 const usage = `peerbus: message passing between Claude Code sessions
 
 Identity and pairing:
-  peerbus id [-name NAME]                         show your identity fingerprint
+  peerbus id [-name NAME] [-machine NAME]         show or set your name and this machine's
   peerbus invite [-self] [-name NAME] [-ttl 15m]  print an invite code and wait for it to be redeemed
   peerbus pair [-name NAME] CODE                  redeem an invite code
   peerbus peer list | rm | enable | disable | rename | set NAME k=v...
@@ -41,7 +42,8 @@ Identity and pairing:
 Using:
   peerbus peers [-filter TEXT] [-json]            sessions reachable right now
   peerbus send [-thread ID] TO TEXT...
-  peerbus inbox [-watch]                          messages waiting for your approval
+  peerbus tui                                     every held message on all your machines: approve, route, decline
+  peerbus inbox [-watch]                          this machine's messages waiting for your approval
   peerbus approve [-to SESSION] ID                deliver a held message (interactive only)
   peerbus deny ID
 
@@ -79,6 +81,8 @@ func main() {
 		err = runPeers(ctx, args)
 	case "send":
 		err = runSend(ctx, args)
+	case "tui":
+		err = runTUI(ctx, args)
 	case "inbox":
 		err = runInbox(ctx, args)
 	case "approve":
@@ -254,6 +258,29 @@ func printHeld(h proto.HeldView) {
 	for _, line := range strings.Split(strings.TrimRight(h.Text, "\n"), "\n") {
 		fmt.Printf("    %s\n", line)
 	}
+}
+
+func runTUI(ctx context.Context, args []string) error {
+	if len(args) > 0 {
+		return errors.New("usage: peerbus tui")
+	}
+	if err := requireTerminal("tui"); err != nil {
+		return err
+	}
+	cfg, err := config.LoadClient()
+	if err != nil {
+		return err
+	}
+	ps, err := idStore().Load()
+	if err != nil {
+		return err
+	}
+	m, err := control(ctx, cfg.Server(), 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	return tui.Run(ctx, m, ps.SelfName())
 }
 
 func runInbox(ctx context.Context, args []string) error {

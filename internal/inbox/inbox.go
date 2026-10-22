@@ -40,6 +40,7 @@ type Held struct {
 func (h *Held) View() proto.HeldView {
 	return proto.HeldView{
 		ID: h.ID, From: h.Msg.From, To: h.Msg.To, Thread: h.Msg.Thread,
+		Peer: h.PeerName, Target: h.Target,
 		Routed: h.Target == "" && !h.Outbound, Outbound: h.Outbound,
 		HeldAt: h.HeldAt.Unix(), Text: h.Msg.Text,
 	}

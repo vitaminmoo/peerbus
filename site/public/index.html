@@ -194,12 +194,14 @@ peerbus peer rm alice</code></pre>
   </tbody>
 </table>
 
-<pre><code>peerbus peer set alice deliver=auto sessions='ghidra-*,desk/*'
-peerbus inbox                  # held messages
-peerbus approve 3fa9           # -to SESSION for one sent to you as a person
-peerbus deny 3fa9</code></pre>
+<pre><code>peerbus peer set alice deliver=auto sessions='ghidra-*,desk/*'</code></pre>
 
-<p>Your session hears that something is held, but not what it says.</p>
+<h3 id="tui">Held messages</h3>
+
+<p>Your Claude only hears that something is waiting, never what it says. You handle it in <code>peerbus tui</code>: every held message on all your machines, in full, to approve, decline, or route to any of your sessions on any machine. It also shows messages sent to you as a person, and your own waiting on <code>send=ask</code>.</p>
+
+<pre><code>peerbus tui
+peerbus inbox -watch           # or just this machine, with desktop notifications</code></pre>
 
 <h2 id="claude">In Claude</h2>
 
@@ -235,6 +237,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
       "Bash(peerbus pair:*)",
       "Bash(peerbus peer:*)",
       "Bash(peerbus approve:*)",
+      "Bash(peerbus tui:*)",
       "Bash(peerbus send:*)",
       "Bash(peerbus inbox:*)",
       "Read(~/.config/peerbus/**)",
@@ -245,7 +248,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
 
 <ul>
   <li><code>~/.config/peerbus/identity.key</code> is you, to every friend. A machine that has it can't be revoked; if one is lost, start a new identity and pair again.</li>
-  <li>Only the CLI, as your OS user on that machine, can approve, deny or list for a session.</li>
+  <li>Only your own CLI or TUI, run with your identity key on any of your machines, can list, approve or decline held messages. Sessions can't, including your own.</li>
   <li>Transcripts are plain text on both ends. Encryption covers the wire, not the endpoints.</li>
   <li>The rendezvous operator sees which addresses meet, when, and how much is relayed.</li>
 </ul>
@@ -264,7 +267,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
   <dt>Transport</dt>
   <dd>QUIC with TLS 1.3, both ends pinned to Ed25519 keys. Paths in order of preference: loopback, LAN, a hole punch using addresses learned from the server or STUN, then a relay through the server, which carries ciphertext it can't read. <code>list_peers</code> shows the path.</dd>
   <dt>Frames</dt>
-  <dd>Newline-delimited JSON over one stream per pair of sessions: hello, update, send, notice, and the peer list between your own sessions.</dd>
+  <dd>Newline-delimited JSON over one stream per pair of sessions: hello, update, send, notice; between your own sessions, the peer list and approved messages being handed over; from your CLI or TUI, inbox, approve and deny.</dd>
   <dt>Policy</dt>
   <dd>The receiving side enforces its <code>peers.json</code>: who connects, what they see, whether a message is held. Held messages wait in <code>~/.local/state/peerbus/inbox.json</code>.</dd>
   <dt>State</dt>

@@ -20,7 +20,7 @@ formats may still change.
 | Your other machines and friends' machines | Working, via a rendezvous server |
 | P2P transport: QUIC, hole punching, relay, STUN | Working and tested |
 | Identity, invites, pairing, permissions | Working |
-| Held messages, `peerbus inbox` / `approve` / `deny` | Working |
+| Held messages: `peerbus tui` across all your machines, `inbox` / `approve` / `deny` on one | Working |
 | Rendezvous server (`peerbus rendezvous`) | Working; public instance at `rv.peerb.us:47615` |
 
 ## How it works
@@ -53,8 +53,8 @@ Claude session ─stdio─ peerbus channel ══ QUIC ══ peerbus channel �
 - Each peer has permissions, enforced by the receiving side: hold or
   auto-deliver their messages, which of your sessions they can address, and
   whether they see your working directories and advertised resources. Held
-  messages wait in `~/.local/state/peerbus/inbox.json` for `peerbus approve`,
-  which hands them to the session over loopback.
+  messages wait in `~/.local/state/peerbus/inbox.json` until you approve
+  them in `peerbus tui` (any of your machines) or with `peerbus approve`.
 
 ## Install
 
@@ -112,6 +112,10 @@ Tools Claude gets:
 
 The CLI does the same from a shell: `peerbus peers`, `peerbus send`,
 `peerbus inbox`, `peerbus approve`, `peerbus deny`.
+
+`peerbus tui` is where the human handles held messages: every one on all
+your machines, with the full text, to approve, decline, or route to any of
+your sessions on any machine. Nothing in it reaches an agent until you act.
 
 ## Rendezvous server
 

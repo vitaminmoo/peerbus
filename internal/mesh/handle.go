@@ -3,8 +3,12 @@ package mesh
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -13,6 +17,7 @@ import (
 	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/proto"
+	"github.com/vitaminmoo/peerbus/internal/transport"
 )
 
 // handle dispatches one inbound frame.
@@ -53,15 +58,25 @@ func (m *Mesh) handle(l *Link, f proto.Frame) {
 			return
 		}
 		l.reply(f.Req, map[string]any{"self": m.SelfAddress(), "peers": m.Views()}, nil)
-	case proto.TApprove:
-		if !l.isLocalControl() {
+	case proto.TInbox:
+		if !l.isOwnControl() {
 			l.reply(f.Req, nil, errors.New("not allowed"))
 			return
 		}
-		res, err := m.approve(f.ID)
+		res, err := m.inboxView()
+		l.reply(f.Req, res, err)
+	case proto.TApprove:
+		if !l.isOwnControl() {
+			l.reply(f.Req, nil, errors.New("not allowed"))
+			return
+		}
+		res, err := m.approve(f.ID, f.To)
+		l.reply(f.Req, res, err)
+	case proto.TDeliver:
+		res, err := m.deliver(l, f)
 		l.reply(f.Req, res, err)
 	case proto.TDeny:
-		if !l.isLocalControl() {
+		if !l.isOwnControl() {
 			l.reply(f.Req, nil, errors.New("not allowed"))
 			return
 		}
@@ -133,7 +148,7 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 		return proto.SendResult{}, fmt.Errorf("couldn't hold the message: %w", err)
 	}
 	m.notice("held",
-		fmt.Sprintf("A message from %s (another person) is waiting for your user's approval. Tell your user; they can review it with `peerbus inbox` and approve with `peerbus approve %s`. Do not approve or deny it yourself.", msg.From, h.ID),
+		fmt.Sprintf("A message from %s (another person) is waiting for your user's approval in `peerbus tui`. Tell them briefly; don't approve or deny it yourself.", msg.From),
 		map[string]string{"held_id": h.ID, "from": msg.From})
 	res.Status = "held"
 	return res, nil
@@ -251,9 +266,49 @@ func (m *Mesh) SubscribeIdle(ctx context.Context, peer string) (status, addr str
 	return res["status"], m.addr(tgt.link), nil
 }
 
-// approve delivers a held message into this session (or, for one of ours
-// waiting on send=ask, sends it) and tells the other side.
-func (m *Mesh) approve(id string) (proto.SendResult, error) {
+// inboxView lists this machine's held messages for our own control clients.
+func (m *Mesh) inboxView() (proto.InboxView, error) {
+	st, err := m.inbox.Load()
+	if err != nil {
+		return proto.InboxView{}, err
+	}
+	m.mu.Lock()
+	v := proto.InboxView{Machine: m.info.Host, InboxID: m.inboxID(), Held: []proto.HeldView{}}
+	m.mu.Unlock()
+	for _, h := range st.Held {
+		v.Held = append(v.Held, h.View())
+	}
+	return v, nil
+}
+
+// inboxID tells this inbox apart from others: the machine, and the state
+// directory, since two OS users (or PEERBUS_STATE_DIR) can mean two inboxes
+// on one machine.
+func (m *Mesh) inboxID() string {
+	dir, _ := filepath.Abs(m.cfg.StateDir)
+	sum := sha256.Sum256([]byte(transport.MachineID() + "\x00" + dir))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ownSession finds another of our sessions, on any machine, by session id.
+func (m *Mesh) ownSession(sid string) *Link {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, l := range m.links {
+		l.mu.Lock()
+		ok := l.peer == nil && l.kind == proto.KindSession && l.info.SID == sid
+		l.mu.Unlock()
+		if ok {
+			return l
+		}
+	}
+	return nil
+}
+
+// approve delivers a held message into this session, or into the session
+// of ours named by to (on any machine), or for one of ours waiting on
+// send=ask, sends it; then tells the other side.
+func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 	h, err := m.inbox.Find(id)
 	if err != nil {
 		return proto.SendResult{}, err
@@ -275,19 +330,70 @@ func (m *Mesh) approve(id string) (proto.SendResult, error) {
 	if m.cfg.OnMessage == nil {
 		return proto.SendResult{}, errors.New("not a session")
 	}
-	if err := m.inbox.Approve(ed25519.PublicKey(h.Peer), h.Msg.Thread); err != nil {
-		return proto.SendResult{}, err
-	}
-	if _, err := m.inbox.Take(id); err != nil {
-		return proto.SendResult{}, err
+	var res proto.SendResult
+	if to == "" || to == mySID {
+		if err := m.inbox.Approve(ed25519.PublicKey(h.Peer), h.Msg.Thread); err != nil {
+			return proto.SendResult{}, err
+		}
+		if _, err := m.inbox.Take(id); err != nil {
+			return proto.SendResult{}, err
+		}
+		res = m.deliverHere(h)
+	} else {
+		l := m.ownSession(to)
+		if l == nil {
+			return proto.SendResult{}, errors.New("that session isn't online")
+		}
+		if err := l.Request(m.ctx, proto.Frame{Type: proto.TDeliver, Data: h}, &res); err != nil {
+			return proto.SendResult{}, err
+		}
+		if _, err := m.inbox.Take(id); err != nil {
+			return proto.SendResult{}, err
+		}
 	}
 	msg := h.Msg
-	msg.To = m.SelfAddress()
-	m.cfg.OnMessage(msg, true)
 	if l := m.linkBySID(h.Peer, msg.FromSID); l != nil {
 		l.write(proto.Frame{Type: proto.TNotice, Kind: "status", Meta: map[string]string{"status": "approved", "msg_id": msg.ID, "thread": msg.Thread}})
 	}
-	return proto.SendResult{Status: "delivered", ID: msg.ID, Thread: msg.Thread, To: msg.To}, nil
+	return res, nil
+}
+
+// deliverHere hands an approved message to this session.
+func (m *Mesh) deliverHere(h *inbox.Held) proto.SendResult {
+	msg := h.Msg
+	msg.To = m.SelfAddress()
+	m.cfg.OnMessage(msg, true)
+	return proto.SendResult{Status: "delivered", ID: msg.ID, Thread: msg.Thread, To: msg.To}
+}
+
+// deliver takes an approved message from another of our sessions, which
+// held it, and opens the thread on this machine so replies flow here.
+func (m *Mesh) deliver(l *Link, f proto.Frame) (proto.SendResult, error) {
+	l.mu.Lock()
+	own := l.peer == nil && l.kind == proto.KindSession
+	l.mu.Unlock()
+	if !own || m.cfg.Kind != proto.KindSession || m.cfg.OnMessage == nil {
+		return proto.SendResult{}, errors.New("not allowed")
+	}
+	b, err := json.Marshal(f.Data)
+	if err != nil {
+		return proto.SendResult{}, err
+	}
+	var h inbox.Held
+	if err := json.Unmarshal(b, &h); err != nil || h.Outbound {
+		return proto.SendResult{}, errors.New("bad held message")
+	}
+	if len(h.Msg.Text) > proto.MaxText || strings.TrimSpace(h.Msg.Text) == "" {
+		return proto.SendResult{}, errors.New("bad held message")
+	}
+	peer := m.peerFor(ed25519.PublicKey(h.Peer))
+	if peer == nil {
+		return proto.SendResult{}, errors.New("that sender isn't one of your peers any more")
+	}
+	if err := m.inbox.Approve(ed25519.PublicKey(h.Peer), h.Msg.Thread); err != nil {
+		return proto.SendResult{}, err
+	}
+	return m.deliverHere(&h), nil
 }
 
 func (m *Mesh) deny(id string) (map[string]string, error) {

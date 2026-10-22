@@ -170,11 +170,20 @@ func (l *Link) reply(req string, data any, err error) {
 }
 
 // isLocalControl reports whether this is the CLI on this machine, run by our
-// own OS user: the only thing allowed to list, approve and deny.
+// own OS user.
 func (l *Link) isLocalControl() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.peer == nil && l.kind == proto.KindControl && l.conn.Path == "local" && l.conn.Inbound
+}
+
+// isOwnControl reports whether this is our own CLI or TUI on any of our
+// machines: what may list, approve and deny held messages. Sessions (the
+// agents) never may.
+func (l *Link) isOwnControl() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.peer == nil && l.kind == proto.KindControl && l.conn.Inbound
 }
 
 func (l *Link) rateOK() bool {
