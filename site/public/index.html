@@ -80,13 +80,14 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus chann
 
 <h2 id="devices">Your machines and friends</h2>
 
-<p>Your machines share one identity, so friends pair with you once rather than once per machine. Here's a second machine joining, then a friend: three terminals, with time running down the page and arrows for what passes between them.</p>
+<p>Your machines share one identity, so friends pair with you once rather than once per machine. Here's a laptop joining your desk, then a friend: three terminals, with time running down the page and arrows for what passes between them.</p>
 
 <div class="pan" tabindex="0" aria-label="Pairing diagram; scroll or drag sideways to see all three terminals">
-<div class="seq" role="group" aria-label="Three terminals: your first machine invites a new machine, then a friend">
-  <div class="term a" style="--from:1;--to:14"></div>
-  <div class="term b" style="--from:3;--to:14"></div>
-  <div class="term f" style="--from:9;--to:14"></div>
+<div class="seq" role="group" aria-label="Three terminals: your desk invites your laptop, then a friend">
+  <canvas class="ether" aria-hidden="true"></canvas>
+  <div class="term a" style="--from:1;--to:18"></div>
+  <div class="term b" style="--from:3;--to:18"></div>
+  <div class="term f" style="--from:9;--to:18"></div>
 
   <!-- stretches where a terminal is blocked on another unit -->
   <div class="wait a" data-label="waiting for unit 02" style="--from:3;--to:7" aria-hidden="true"></div>
@@ -94,69 +95,99 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus chann
   <div class="wait a" data-label="waiting for unit 03" style="--from:9;--to:13" aria-hidden="true"></div>
   <div class="wait f" data-label="waiting for unit 01" style="--from:11;--to:13" aria-hidden="true"></div>
 
-  <div class="bar a" style="--r:1">unit 01 · your first machine</div>
-<pre class="t a" data-lane="unit 01 · your first machine" style="--r:2"><span class="c"># Name yourself once. Nothing else needs setting up on one machine.</span>
-<span class="p">$</span> peerbus id -name yourname
+  <div class="bar a" style="--r:1">unit 01 · desk, your first machine</div>
+<pre class="t a" data-lane="unit 01 · desk, your first machine" style="--r:2"><span class="c"># Name yourself (all your machines) and this machine. Nothing else needs</span>
+<span class="c"># setting up on one machine.</span>
+<span class="p">$</span> peerbus id -name yourname -machine desk
 Identity:    3f9a 1c02 77de b415
 Name:        yourname
+Machine:     desk
 Store:       /home/you/.config/peerbus
 Peers:       0 (0 enabled)
 
-<span class="c"># Invite another machine of yours. This one waits at a meeting point
-# that only the code knows.</span>
+<span class="c"># Invite another machine of yours. This one waits at a meeting point</span>
+<span class="c"># that only the code knows.</span>
 <span class="p">$</span> peerbus invite -self
 On your other device, run (valid until 20:56, single use):
 
-  peerbus pair pb1-<span class="secret" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
+  peerbus pair pb1-<span class="secret" data-code="1" data-role="out" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
 
 That device will get your identity key and your whole peer list.
 Waiting for them... (Ctrl-C to cancel)</pre>
 
-  <div class="bar b" style="--r:3">unit 02 · your other machine</div>
+  <div class="bar b" style="--r:3">unit 02 · laptop, your other machine</div>
   <div class="msg g1 to-l" data-from="unit 01" data-to="unit 02" style="--r:3;--span:2"><span>the code, copied by you</span></div>
-<pre class="t b" data-lane="unit 02 · your other machine" style="--r:4"><span class="c"># Install, then redeem the code. This machine becomes you.</span>
+<pre class="t b" data-lane="unit 02 · laptop, your other machine" style="--r:4"><span class="c"># Install, then redeem the code. This machine becomes you.</span>
 <span class="p">$</span> go install github.com/vitaminmoo/peerbus/cmd/peerbus@latest
-<span class="p">$</span> peerbus pair pb1-<span class="secret" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
-This invite makes this machine one of the inviter's own devices: it takes their identity and peer list.
+<span class="p">$</span> peerbus pair pb1-<span class="secret" data-code="1" data-role="in" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
+This invite makes this machine one of the inviter&#x27;s own devices: it takes their identity and peer list.
 Continue? [y/N] y
 Pairing...</pre>
   <div class="msg g1 to-r" data-from="unit 02" data-to="unit 01" style="--r:5"><span>finds it via rv.peerb.us, proves it has the code</span></div>
   <div class="msg g1 to-l" data-from="unit 01" data-to="unit 02" style="--r:6"><span>your identity key and peer list</span></div>
-<pre class="t a" data-lane="unit 01 · your first machine" style="--r:7">
-Your other device is paired.</pre>
-<pre class="t b" data-lane="unit 02 · your other machine" style="--r:7">This machine is now one of your devices.</pre>
+<pre class="t a" data-lane="unit 01 · desk, your first machine" style="--r:7">
+Your other device is paired.
 
-<pre class="t a" data-lane="unit 01 · your first machine" style="--r:8">
-<span class="c"># Invite a friend. Send the code somewhere private: whoever redeems it
-# first is who you've paired with.</span>
+<span class="c"># With a Claude session open on each machine, either one sees both.</span>
+<span class="p">$</span> peerbus peers
+
+Your sessions:
+  yourname/ghidra#91f0aa  busy  host=desk  via=local
+  yourname/notes#4be1c2  idle  host=laptop  via=direct</pre>
+<pre class="t b" data-lane="unit 02 · laptop, your other machine" style="--r:7">This machine is now one of your devices.
+
+<span class="c"># Same identity, its own machine name.</span>
+<span class="p">$</span> peerbus id -machine laptop
+Identity:    3f9a 1c02 77de b415
+Name:        yourname
+Machine:     laptop
+Store:       /home/you/.config/peerbus
+Peers:       0 (0 enabled)</pre>
+
+<pre class="t a" data-lane="unit 01 · desk, your first machine" style="--r:8">
+<span class="c"># Invite a friend. Send the code somewhere private: whoever redeems it</span>
+<span class="c"># first is who you&#x27;ve paired with.</span>
 <span class="p">$</span> peerbus invite
 Send this to them (valid until 21:12, single use):
 
-  peerbus pair pb1-<span class="secret" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
+  peerbus pair pb1-<span class="secret" data-code="2" data-role="out" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
 
-Anyone holding the code can pair as them until it's used, so send it somewhere private.
+Anyone holding the code can pair as them until it&#x27;s used, so send it somewhere private.
 Waiting for them... (Ctrl-C to cancel)</pre>
 
-  <div class="bar f" style="--r:9">unit 03 · a friend's machine</div>
+  <div class="bar f" style="--r:9">unit 03 · alice, a friend</div>
   <div class="msg g2 to-r" data-from="unit 01" data-to="unit 03" style="--r:9;--span:2"><span>the code, sent somewhere private</span></div>
-<pre class="t f" data-lane="unit 03 · a friend's machine" style="--r:10"><span class="c"># Your friend, after installing peerbus.</span>
-<span class="p">$</span> peerbus pair pb1-<span class="secret" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
+<pre class="t f" data-lane="unit 03 · alice, a friend" style="--r:10"><span class="c"># Your friend, after installing peerbus.</span>
+<span class="p">$</span> peerbus pair pb1-<span class="secret" data-code="2" data-role="in" role="img" aria-label="a secret code"><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span><span>▓</span><span>█</span><span>▓</span><span>▒</span><span>░</span><span>▒</span></span>
 Pairing...</pre>
   <div class="msg g2 to-l" data-from="unit 03" data-to="unit 01" style="--r:11"><span>finds you via rv.peerb.us, proves it has the code</span></div>
   <div class="msg g2 to-r" data-from="unit 01" data-to="unit 03" style="--r:12"><span>a fresh secret for the two of you</span></div>
 
-<pre class="t end a" data-lane="unit 01 · your first machine" style="--r:13">
-Paired with "alice", fingerprint 8c41 e0d7 52aa 9b36.
+<pre class="t a" data-lane="unit 01 · desk, your first machine" style="--r:13">
+Paired with &quot;alice&quot;, fingerprint 8c41 e0d7 52aa 9b36.
 Their messages are held for your approval until you change it: peerbus peer set alice deliver=auto
 
 <span class="c"># Compare fingerprints with alice some other way to be sure.</span></pre>
-<pre class="t end b" data-lane="unit 02 · your other machine" style="--r:13">
-<span class="c"># This machine copied the peer list before alice was paired, so it
-# can't reach alice yet. Re-pair it to catch up.</span>
-<span class="p">$</span> peerbus peer list
-No peers yet. Pair with: peerbus invite</pre>
-<pre class="t end f" data-lane="unit 03 · a friend's machine" style="--r:13">Paired with "yourname", fingerprint 3f9a 1c02 77de b415.
+<pre class="t f" data-lane="unit 03 · alice, a friend" style="--r:13">Paired with &quot;yourname&quot;, fingerprint 3f9a 1c02 77de b415.
 Their messages are held for your approval until you change it: peerbus peer set yourname deliver=auto</pre>
+
+  <div class="msg g1 to-l" data-from="unit 01" data-to="unit 02" style="--r:14"><span>alice&#x27;s entry, synced between your machines</span></div>
+<pre class="t b" data-lane="unit 02 · laptop, your other machine" style="--r:15">
+<span class="c"># alice was paired on the desk; the peer list followed.</span>
+<span class="p">$</span> peerbus peer list
+NAME   FINGERPRINT          ENABLED  DELIVER  SEND  SESSIONS  DETAILS  RESOURCES  PAIRED
+alice  8c41 e0d7 52aa 9b36  true     hold     auto  *         false    true       2026-10-22
+
+<span class="c"># Keep alice to the desk. Rules sync too.</span>
+<span class="p">$</span> peerbus peer set alice sessions='desk/*'
+alice: deliver=hold send=auto sessions=desk/* details=false resources=true</pre>
+  <div class="msg g1 to-r" data-from="unit 02" data-to="unit 01" style="--r:16"><span>the new rule, synced back</span></div>
+<pre class="t end f" data-lane="unit 03 · alice, a friend" style="--r:17">
+<span class="c"># What alice sees of you now: the desk, not the laptop.</span>
+<span class="p">$</span> peerbus peers
+
+Other people&#x27;s sessions (a first message to them may wait for their approval):
+  yourname/ghidra#91f0aa  busy  host=desk  via=direct</pre>
 </div>
 </div>
 <p class="pan-hint">Drag or scroll sideways to see all three.</p>
@@ -165,7 +196,11 @@ Their messages are held for your approval until you change it: peerbus peer set 
 
 <p>Pairing refuses to overwrite a machine that already has peers of its own unless you pass <code>-force</code>. Both machines talk to the rendezvous server to find each other; see <a href="#server">running your own</a> if you'd rather not use <code>rv.peerb.us</code>.</p>
 
-<p>Once a session is running on each machine, <code>peerbus peers</code> on either shows both. <code>peerbus peer list</code> stays empty: it lists other people, and your machines are all you.</p>
+<p>Each machine is listed under its hostname unless you name it with <code>peerbus id -machine laptop</code>. The machine name belongs to that machine; your own name (<code>-name</code>) is shared by all of them.</p>
+
+<p>Your machines keep one peer list between them. Pair a friend, change their permissions or remove them on any machine, and the others pick it up as soon as a session there is connected to one on the machine where you made the change. For each peer the most recent change wins, and removals stick: a machine that was switched off doesn't bring a removed friend back.</p>
+
+<p>Once a session is running on each machine, <code>peerbus peers</code> on either shows both. <code>peerbus peer list</code> shows only other people, since your machines are all you.</p>
 
 <h3 id="friends">Friends</h3>
 
@@ -174,8 +209,6 @@ Their messages are held for your approval until you change it: peerbus peer set 
 <p>Both sides print the other's fingerprint. If you want to be sure nobody swapped the code in transit, compare fingerprints some other way; <code>peerbus id</code> shows yours.</p>
 
 <p>Their sessions appear in <code>list_peers</code> and <code>peerbus peers</code> under the name you gave them, within a few seconds, without restarting anything. The first message either Claude sends the other is held for a human to approve; see <a href="#perms">permissions</a> for how to loosen that.</p>
-
-<p>Your machines don't sync peers with each other. A friend reaches the machines that had them in their peer list when they last paired. To catch another machine up, run <code>peerbus invite -self</code> on one that has the friend and <code>peerbus pair -force pb1-…</code> on the other.</p>
 
 <p>Manage peers with <code>peerbus peer</code>:</p>
 
@@ -186,20 +219,20 @@ peerbus peer rm alice</code></pre>
 
 <h2 id="perms">Permissions</h2>
 
-<p>Each peer has settings, enforced by your side and picked up by running sessions as soon as you change them:</p>
+<p>Each peer has settings, enforced by your side, shared by all your machines, and picked up by running sessions as soon as you change them:</p>
 
 <table>
   <thead><tr><th>Setting</th><th>Values</th><th>Default</th><th>Means</th></tr></thead>
   <tbody>
     <tr><td><code>deliver</code></td><td>hold, auto</td><td>hold</td><td>Their messages wait for your approval. Approving one opens that conversation for two hours, and so does a message your Claude sends them first.</td></tr>
     <tr><td><code>send</code></td><td>auto, ask</td><td>auto</td><td>Whether your sessions' messages to them wait for your approval.</td></tr>
-    <tr><td><code>sessions</code></td><td>globs</td><td>*</td><td>Which of your sessions they can see and address, by name.</td></tr>
+    <tr><td><code>sessions</code></td><td>globs</td><td>*</td><td>Which of your sessions they can see and address, by name. A glob with a <code>/</code> matches <code>machine/name</code>, so <code>laptop/*</code> is everything on one machine.</td></tr>
     <tr><td><code>details</code></td><td>true, false</td><td>false</td><td>Show them your sessions' working directories and Claude accounts.</td></tr>
     <tr><td><code>resources</code></td><td>true, false</td><td>true</td><td>Show them what your sessions advertise.</td></tr>
   </tbody>
 </table>
 
-<pre><code>peerbus peer set alice deliver=auto sessions='ghidra-*,re-*'</code></pre>
+<pre><code>peerbus peer set alice deliver=auto sessions='ghidra-*,desk/*'</code></pre>
 
 <p>Held messages wait in <code>~/.local/state/peerbus/inbox.json</code> on the machine that received them. The session is told that something is waiting, but not what it says:</p>
 
@@ -303,6 +336,94 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
         c.style.opacity = (.55 + Math.random() * .45).toFixed(2);
       }
     }, 70);
+  }
+
+  // Each invite code drifts as particles from the terminal that printed it
+  // to the one that redeems it, the way it travels by hand.
+  const seq = document.querySelector(".seq");
+  const ether = seq && seq.querySelector(".ether");
+  if (ether && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const ctx = ether.getContext("2d");
+    const glyphs = [..."░▒▓▖▗▘▝▚▞·•"];
+    let flows = [], parts = [], running = false, last = 0;
+
+    const centre = el => {
+      const r = el.getBoundingClientRect(), o = seq.getBoundingClientRect();
+      return { x: r.left - o.left + r.width / 2, y: r.top - o.top + r.height / 2 };
+    };
+    const measure = () => {
+      if (getComputedStyle(seq).display !== "grid") { flows = []; return; }
+      const dpr = devicePixelRatio || 1;
+      ether.width = seq.offsetWidth * dpr;
+      ether.height = seq.offsetHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      flows = [];
+      for (const out of seq.querySelectorAll('.secret[data-role="out"]')) {
+        const into = seq.querySelector(`.secret[data-role="in"][data-code="${out.dataset.code}"]`);
+        if (into) flows.push({ a: centre(out), b: centre(into) });
+      }
+    };
+    const spawn = f => {
+      const dx = f.b.x - f.a.x, dy = f.b.y - f.a.y, len = Math.hypot(dx, dy) || 1;
+      parts.push({
+        f, t: 0,
+        speed: .22 + Math.random() * .18,
+        // how far each particle's path bows out, either side of the line
+        bow: (Math.random() - .5) * 260, nx: -dy / len, ny: dx / len,
+        wob: Math.random() * Math.PI * 2,
+        g: glyphs[Math.random() * glyphs.length | 0],
+        px: f.a.x, py: f.a.y,
+      });
+    };
+    const frame = now => {
+      if (!running) return;
+      const dt = Math.min(.05, (now - last) / 1000 || 0);
+      last = now;
+      for (const f of flows) if (Math.random() < 1.4 * dt * 30) spawn(f);
+      ctx.clearRect(0, 0, ether.width, ether.height);
+      ctx.font = "11px ui-monospace, Menlo, Consolas, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineCap = "round";
+      const keep = [];
+      for (const p of parts) {
+        p.t += p.speed * dt;
+        if (p.t >= 1) continue;
+        keep.push(p);
+        // easing in: slow to leave, then pulled in fast
+        const e = p.t * p.t * (3 - 2 * p.t) * .35 + Math.pow(p.t, 2.2) * .65;
+        const bow = Math.sin(e * Math.PI) * p.bow;
+        const wob = Math.sin(now / 260 + p.wob) * 9 * (1 - e);
+        const x = p.f.a.x + (p.f.b.x - p.f.a.x) * e + p.nx * (bow + wob);
+        const y = p.f.a.y + (p.f.b.y - p.f.a.y) * e + p.ny * (bow + wob);
+        const alpha = Math.min(1, p.t * 8) * Math.min(1, (1 - p.t) * 5);
+        ctx.strokeStyle = `rgba(127, 233, 210, ${.35 * alpha})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p.px, p.py);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.shadowColor = "rgba(127, 233, 210, .9)";
+        ctx.shadowBlur = 8;
+        ctx.fillStyle = `rgba(190, 255, 240, ${alpha})`;
+        if (Math.random() < .04) p.g = glyphs[Math.random() * glyphs.length | 0];
+        ctx.fillText(p.g, x, y);
+        ctx.shadowBlur = 0;
+        p.px = x; p.py = y;
+      }
+      parts = keep;
+      requestAnimationFrame(frame);
+    };
+    const run = on => {
+      if (on === running) return;
+      running = on;
+      if (on) { last = performance.now(); requestAnimationFrame(frame); }
+      else ctx.clearRect(0, 0, ether.width, ether.height);
+    };
+    measure();
+    addEventListener("resize", measure);
+    if (document.fonts) document.fonts.ready.then(measure);
+    new IntersectionObserver(([e]) => run(e.isIntersecting && flows.length > 0)).observe(seq);
   }
 
   // The diagram is wider than most screens: start on the middle terminal

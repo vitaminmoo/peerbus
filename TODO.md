@@ -1,27 +1,18 @@
 # TODO
 
-## Sync peers between your own machines
+## Push peer edits from the CLI
 
-Each machine has its own `peers.json`, copied once by `peerbus pair` from
-`invite -self`. A friend paired on one machine afterwards only reaches that
-machine until the others re-pair with `-force`.
+Your machines sync peers.json through their running sessions. An edit made
+with `peerbus peer` on a machine with no session open waits until one
+starts there. The CLI could join the network briefly, as `peerbus peers`
+does, and push the change itself.
 
-Own devices already hold live links to each other, so they could exchange
-peer-list changes over them. Open questions:
+## Show where peer changes came from
 
-- Opt in or on by default? A machine might deliberately carry fewer peers,
-  for example a work laptop that shouldn't reach a friend's sessions.
-- Per-machine policy instead of a switch: which peers a machine accepts
-  from the others, or a flag per peer ("this machine only").
-- What syncs: additions, removals, renames, `peer set` permission edits,
-  `enable`/`disable`. Removals and disables propagating matters most, since
-  revoking a friend should revoke them everywhere.
-- Conflicts when two machines edit the same peer while apart: last writer
-  wins by timestamp, or keep both and ask.
-- Trust: a compromised machine could push a peer to all the others. That's
-  within what the shared identity key already allows, but syncing changes
-  should still be visible (`peerbus peer list` showing where a peer came
-  from, a notice on the receiving machine).
+Synced changes apply silently. `peerbus peer list` could say which machine
+last changed each peer, and a session could get a notice when a sync adds
+or removes someone, since a compromised machine can push peers to the
+others (within what the shared identity key already allows).
 
 ## Say why pairing hangs
 

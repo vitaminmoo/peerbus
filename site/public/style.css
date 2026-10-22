@@ -1,26 +1,42 @@
+/* Cassette futurism: beige hardware casings, stencilled plates, hazard
+   stripes, amber phosphor screens. Prose stays in a plain sans so it reads
+   easily; labels and headings are monospace and uppercase. */
+
 :root {
-  --bg: #fbfaf7;
-  --fg: #23211d;
-  --muted: #6b665d;
-  --rule: #e2ded5;
-  --code-bg: #f1eee7;
-  --link: #1f5fa8;
-  --note-bg: #fff6dc;
-  --note-rule: #e8cf86;
+  --bg: #e8e2d1;
+  --panel: #f3eee1;
+  --fg: #2b2920;
+  --muted: #6b6454;
+  --rule: #c8bfa6;
+  --ink: #2b2920;
+  --code-bg: #ddd5be;
+  --link: #a3461a;
+  --note-bg: #f0dc9f;
   --arrow: #8a8478;
+  --orange: #e2772b;
+  --teal: #3f9a8e;
+  --red: #c9443a;
+  --mustard: #d9a521;
+  --casing: #d6ceb6;
+  --casing-lo: #a99f84;
+  --screen: #14130e;
+  --phosphor: #f3b44a;
+  --phosphor-dim: #a4803e;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #17181a;
-    --fg: #e4e2dd;
-    --muted: #9b978f;
-    --rule: #2d2f33;
-    --code-bg: #212327;
-    --link: #8ab4f0;
-    --note-bg: #2a2516;
-    --note-rule: #5c4f25;
+    --bg: #191813;
+    --panel: #22201a;
+    --fg: #e6dfca;
+    --muted: #a39c87;
+    --rule: #3b372c;
+    --ink: #e6dfca;
+    --code-bg: #2e2b23;
+    --link: #f0a35e;
+    --note-bg: #2e2714;
     --arrow: #77736b;
   }
 }
@@ -32,9 +48,12 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   overflow-x: clip; /* the full-bleed diagram is 100vw, scrollbar included */
-  background: var(--bg);
+  background:
+    linear-gradient(rgb(128 112 80 / .07) 1px, transparent 1px) 0 0 / 100% 1.6rem,
+    var(--bg);
   color: var(--fg);
   font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  counter-reset: sec;
 }
 
 main {
@@ -43,9 +62,34 @@ main {
   padding: 3rem 1rem 4rem;
 }
 
+/* masthead: a model plate and a four-colour stripe */
+header::before {
+  content: "PB-1 · inter-session message bus";
+  display: inline-block;
+  margin-bottom: .6rem;
+  padding: .15rem .5rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 3px;
+  font: 700 .68rem/1.4 var(--mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+
 header h1 {
-  font: 600 2rem/1.2 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  margin: 0 0 .5rem;
+  margin: 0;
+  font: 800 2.9rem/1.05 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+
+header h1::after {
+  content: "";
+  display: block;
+  height: .55rem;
+  margin: .6rem 0 1rem;
+  background: linear-gradient(90deg,
+    var(--mustard) 0 25%, var(--orange) 25% 50%, var(--red) 50% 75%, var(--teal) 75%);
+  border-radius: 2px;
 }
 
 .lede {
@@ -54,54 +98,130 @@ header h1 {
   margin-top: 0;
 }
 
+/* section plates: a hazard-striped tab and a section number */
 h2 {
-  font-size: 1.25rem;
-  margin: 2.75rem 0 .75rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--rule);
+  position: relative;
+  counter-increment: sec;
+  margin: 3rem 0 1rem;
+  padding: .55rem .9rem .55rem 3.4rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: 0 2px 0 var(--rule);
+  font: 700 1rem/1.3 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
 }
 
-a { color: var(--link); }
+h2::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2.4rem;
+  border-radius: 3px 0 0 3px;
+  background: repeating-linear-gradient(-45deg, var(--orange) 0 6px, var(--ink) 6px 12px);
+}
 
+h2::after {
+  content: "sec " counter(sec, decimal-leading-zero);
+  float: right;
+  margin-left: 1rem;
+  color: var(--muted);
+  font-size: .7rem;
+  font-weight: 600;
+  line-height: 1.85;
+}
+
+h3 {
+  margin: 2rem 0 .5rem;
+  font: 700 .85rem/1.4 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+h3::before {
+  content: "▸ ";
+  color: var(--orange);
+}
+
+a { color: var(--link); text-underline-offset: 2px; }
+
+/* keycaps */
 nav {
   display: flex;
   flex-wrap: wrap;
-  gap: .25rem 1rem;
-  margin: 1.5rem 0 0;
-  font-size: .95rem;
+  gap: .55rem .5rem;
+  margin: 1.75rem 0 0;
 }
 
+nav a {
+  padding: .3rem .6rem .25rem;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  box-shadow: 0 3px 0 var(--casing-lo);
+  color: var(--fg);
+  font: 600 .72rem/1.3 var(--mono);
+  letter-spacing: .08em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+nav a:hover { border-color: var(--orange); }
+nav a:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--casing-lo); }
+
 code, pre {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: var(--mono);
   font-size: .88em;
 }
 
 :not(pre) > code {
   background: var(--code-bg);
-  padding: .1em .3em;
+  border: 1px solid var(--rule);
+  padding: .05em .3em;
   border-radius: 3px;
 }
 
+/* code blocks are small amber screens in a casing */
 pre {
-  background: var(--code-bg);
   padding: .8rem 1rem;
-  border-radius: 4px;
   overflow-x: auto;
   line-height: 1.45;
+  background:
+    repeating-linear-gradient(transparent 0 2px, rgb(0 0 0 / .25) 2px 3px),
+    var(--screen);
+  color: var(--phosphor);
+  text-shadow: 0 0 5px rgb(243 180 74 / .4);
+  border: 6px solid var(--casing);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--casing-lo), inset 0 0 24px rgb(0 0 0 / .6);
 }
 
 pre.diagram {
-  background: none;
-  padding-left: 0;
-  font-size: .8em;
-  color: var(--muted);
+  font-size: .78em;
 }
 
+/* a caution plate */
 .note {
+  position: relative;
   background: var(--note-bg);
-  border-left: 3px solid var(--note-rule);
-  padding: .6rem .9rem;
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  padding: .65rem .9rem .65rem 3.4rem;
   font-size: .95rem;
+}
+
+.note::before {
+  content: "";
+  position: absolute;
+  left: .6rem;
+  top: .6rem;
+  bottom: .6rem;
+  width: 2rem;
+  border-radius: 2px;
+  background: repeating-linear-gradient(-45deg, var(--mustard) 0 6px, var(--ink) 6px 12px);
 }
 
 table {
@@ -110,6 +230,8 @@ table {
   font-size: .93rem;
   display: block;
   overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
 }
 
 th, td {
@@ -119,11 +241,26 @@ th, td {
   border-bottom: 1px solid var(--rule);
 }
 
-th { font-weight: 600; }
+th {
+  background: var(--panel);
+  font: 700 .72rem/1.4 var(--mono);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
 
-h3 {
-  font-size: 1.05rem;
-  margin: 2rem 0 .5rem;
+tbody tr:nth-child(even) { background: rgb(128 112 80 / .06); }
+
+dt { margin-top: .8rem; }
+dd { margin: .2rem 0 0 1.25rem; }
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  border-top: 4px solid transparent;
+  border-image: linear-gradient(90deg,
+    var(--mustard) 0 25%, var(--orange) 25% 50%, var(--red) 50% 75%, var(--teal) 75%) 1;
+  color: var(--muted);
+  font-size: .9rem;
 }
 
 /* Pairing diagram: three terminals side by side, time running down, with
@@ -169,6 +306,7 @@ h3 {
   --gutter: 9.5rem;
   display: grid;
   grid-template-columns: var(--tw) var(--gutter) var(--tw) var(--gutter) var(--tw);
+  position: relative;
   width: max-content;
   margin: 0 auto;
   padding: .5rem 1.5rem 1.25rem;
@@ -200,6 +338,16 @@ h3 {
     inset 0 0 40px rgb(0 0 0 / .7),
     0 2px 0 var(--casing-lo),
     0 10px 24px rgb(0 0 0 / .22);
+}
+
+/* particles carrying each invite code to the terminal that redeems it */
+.seq .ether {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
 }
 
 /* blocked on another unit: phosphor static, a rolling scan band and a
@@ -305,6 +453,8 @@ h3 {
 .seq pre.t {
   z-index: 1;
   margin: 0;
+  border: 0;
+  box-shadow: none;
   padding: .55rem calc(var(--edge) + 1rem) .35rem;
   background: none;
   border-radius: 0;
@@ -370,7 +520,7 @@ h3 {
   .pan { width: auto; left: auto; margin: 1.5rem 0 2rem; overflow: visible; cursor: auto; }
   .pan-hint { display: none; }
   .seq { display: block; width: auto; padding: 0; }
-  .seq .term, .seq .bar, .seq .wait { display: none; }
+  .seq .term, .seq .bar, .seq .wait, .seq .ether { display: none; }
   .seq pre.t {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -398,13 +548,3 @@ h3 {
   .seq .msg::before { content: "↓ " attr(data-from) " → " attr(data-to) ": "; position: static; border: 0; }
 }
 
-dt { margin-top: .8rem; }
-dd { margin: .2rem 0 0 1.25rem; }
-
-footer {
-  margin-top: 3rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--rule);
-  color: var(--muted);
-  font-size: .9rem;
-}

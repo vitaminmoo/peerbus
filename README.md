@@ -86,12 +86,18 @@ friends:
 
 ```sh
 peerbus id -name yourname     # your fingerprint and the name you suggest
+peerbus id -machine laptop    # name this machine (default: its hostname)
 peerbus invite -self          # add one of your own machines
 peerbus invite                # invite a friend; send them the code privately
 peerbus pair pb1-…            # redeem a code (on the other side)
 peerbus peer list
-peerbus peer set alice deliver=auto sessions='ghidra-*'
+peerbus peer set alice deliver=auto sessions='ghidra-*,desk/*'
 ```
+
+Your machines keep one peer list: pairing, permission changes and
+removals on one reach the others whenever their sessions are connected,
+with the latest change to each peer winning. A `sessions` glob containing
+`/` matches `machine/session`, so `desk/*` limits a friend to one machine.
 
 Commands that change trust refuse to run without a terminal, which keeps a
 session's Bash tool from running them. That's a speed bump, so also deny
