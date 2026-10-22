@@ -84,10 +84,14 @@ type Node struct {
 	registered time.Time
 	nextReq    uint32
 	reqs       map[uint32]chan ctl
-	punches    map[Handle]*punch
+	// punches are hole punches in progress, by nonce: a dial of ours and an
+	// offer from the same peer can be in flight at once when both sides
+	// dial each other.
+	punches map[[16]byte]*punch
 }
 
 type punch struct {
+	peer   Handle
 	nonce  [16]byte
 	answer chan sigPayload // set on the dialing side
 	found  chan *net.UDPAddr
@@ -105,7 +109,7 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		machine: MachineID(),
 		regOK:   make(chan struct{}),
 		reqs:    map[uint32]chan ctl{},
-		punches: map[Handle]*punch{},
+		punches: map[[16]byte]*punch{},
 	}
 	if n.log == nil {
 		n.log = log.New(io.Discard, "", 0)
@@ -344,10 +348,12 @@ func (n *Node) readLoop() {
 			}
 			var sender Handle
 			copy(sender[:], b[17:49])
+			var nonce [16]byte
+			copy(nonce[:], b[1:17])
 			n.mu.Lock()
-			p := n.punches[sender]
+			p := n.punches[nonce]
 			n.mu.Unlock()
-			if p == nil || string(p.nonce[:]) != string(b[1:17]) {
+			if p == nil || p.peer != sender {
 				continue
 			}
 			if b[0] == pPunch {
@@ -388,11 +394,17 @@ func (n *Node) onControl(c ctl) {
 }
 
 func (n *Node) onSignal(from Handle, sp sigPayload) {
+	nb, err := hex.DecodeString(sp.Nonce)
+	if err != nil || len(nb) != 16 {
+		return
+	}
+	var nonce [16]byte
+	copy(nonce[:], nb)
 	if sp.Role == "answer" {
 		n.mu.Lock()
-		p := n.punches[from]
+		p := n.punches[nonce]
 		n.mu.Unlock()
-		if p != nil && p.answer != nil && hex.EncodeToString(p.nonce[:]) == sp.Nonce {
+		if p != nil && p.answer != nil && p.peer == from {
 			select {
 			case p.answer <- sp:
 			default:
@@ -402,22 +414,36 @@ func (n *Node) onSignal(from Handle, sp sigPayload) {
 	}
 	// An offer: answer with our candidates and punch toward theirs. The
 	// dialer picks the path; both listeners stay open regardless.
-	p := &punch{found: make(chan *net.UDPAddr, 1)}
-	nb, err := hex.DecodeString(sp.Nonce)
-	if err != nil || len(nb) != 16 {
-		return
-	}
-	copy(p.nonce[:], nb)
+	p := &punch{peer: from, nonce: nonce, found: make(chan *net.UDPAddr, 1)}
 	n.mu.Lock()
-	n.punches[from] = p
+	_, resent := n.punches[nonce] // the dialer resends when our answer is lost
+	if !resent {
+		n.punches[nonce] = p
+	}
 	n.mu.Unlock()
 	ans, _ := json.Marshal(sigPayload{Role: "answer", Nonce: sp.Nonce, Machine: n.machine, Cands: n.candidates()})
 	if srv := n.server(); srv != nil {
 		n.tr.WriteTo(ctlPacket(ctl{T: "sig", To: &from, Payload: ans}), srv)
 	}
+	if resent {
+		return // already punching
+	}
+	n.forgetPunch(nonce)
 	if !n.cfg.DisablePunch {
 		go n.punchLoop(p, sp, 3*time.Second)
 	}
+}
+
+// punchTTL is how long a punch's state is kept: past the dial's own
+// timeouts, so late packets still find it.
+const punchTTL = 30 * time.Second
+
+func (n *Node) forgetPunch(nonce [16]byte) {
+	time.AfterFunc(punchTTL, func() {
+		n.mu.Lock()
+		delete(n.punches, nonce)
+		n.mu.Unlock()
+	})
 }
 
 func (n *Node) candidates() []string {
@@ -538,11 +564,12 @@ func (n *Node) Dial(ctx context.Context, p Peer, allow func(ed25519.PublicKey) b
 		return nil, ErrNoServer
 	}
 
-	pu := &punch{answer: make(chan sigPayload, 1), found: make(chan *net.UDPAddr, 1)}
+	pu := &punch{peer: p.Handle, answer: make(chan sigPayload, 1), found: make(chan *net.UDPAddr, 1)}
 	rand.Read(pu.nonce[:])
 	n.mu.Lock()
-	n.punches[p.Handle] = pu
+	n.punches[pu.nonce] = pu
 	n.mu.Unlock()
+	n.forgetPunch(pu.nonce)
 	nonce := hex.EncodeToString(pu.nonce[:])
 	offer, _ := json.Marshal(sigPayload{Role: "offer", Nonce: nonce, Machine: n.machine, Cands: n.candidates()})
 

@@ -76,9 +76,12 @@ func run(t *testing.T, s identity.Store, state, srv, kind string, info proto.Ses
 	return m
 }
 
+// until waits for f. Outside the mesh package's tests discovery runs at its
+// real pace (every 5s, 30s before redialing a failed dial), so allow for a
+// retry when the machine is busy.
 func until(t *testing.T, what string, f func() bool) {
 	t.Helper()
-	for end := time.Now().Add(15 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+	for end := time.Now().Add(75 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
 		if f() {
 			return
 		}
