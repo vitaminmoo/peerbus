@@ -202,6 +202,62 @@ h3 {
     0 10px 24px rgb(0 0 0 / .22);
 }
 
+/* blocked on another unit: phosphor static, a rolling scan band and a
+   flickering label */
+.seq .wait {
+  grid-row: var(--from) / var(--to);
+  position: relative;
+  margin: 0 var(--edge);
+  overflow: hidden;
+  background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .95 0 0 0 0 .72 0 0 0 0 .32 0 0 0 .5 -.12'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 180px 180px;
+  animation: seq-static .4s steps(4) infinite;
+}
+
+.seq .wait::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 35%;
+  background: linear-gradient(transparent, rgb(243 180 74 / .09), transparent);
+  animation: seq-roll 5s linear infinite;
+}
+
+.seq .wait::after {
+  content: attr(data-label);
+  position: absolute;
+  inset: 50% 0 auto;
+  transform: translateY(-50%);
+  text-align: center;
+  color: var(--phosphor-dim);
+  font-size: .72rem;
+  letter-spacing: .32em;
+  text-transform: uppercase;
+  text-shadow: -1px 0 rgb(255 60 90 / .5), 1px 0 rgb(60 200 255 / .5);
+  animation: seq-flicker 3.2s steps(1) infinite;
+}
+
+@keyframes seq-static {
+  25% { background-position: 37px -61px; }
+  50% { background-position: -83px 29px; }
+  75% { background-position: 53px 97px; }
+}
+@keyframes seq-roll {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(300%); }
+}
+@keyframes seq-flicker {
+  0%, 100% { opacity: .75; }
+  41% { opacity: .3; transform: translate(2px, -50%); }
+  43% { opacity: .8; transform: translateY(-50%); }
+  77% { opacity: .45; }
+  79% { opacity: .75; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .seq .wait, .seq .wait::before, .seq .wait::after { animation: none; }
+  .seq .wait::before { content: none; }
+}
+
 /* the unit plate */
 .seq .bar {
   position: relative;
@@ -314,7 +370,7 @@ h3 {
   .pan { width: auto; left: auto; margin: 1.5rem 0 2rem; overflow: visible; cursor: auto; }
   .pan-hint { display: none; }
   .seq { display: block; width: auto; padding: 0; }
-  .seq .term, .seq .bar { display: none; }
+  .seq .term, .seq .bar, .seq .wait { display: none; }
   .seq pre.t {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
