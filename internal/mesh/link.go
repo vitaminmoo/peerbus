@@ -26,6 +26,7 @@ type Link struct {
 	r      *bufio.Reader
 	handle transport.Handle // the remote session's
 	key    ed25519.PublicKey
+	since  time.Time // when it was registered; set before it's shared
 
 	wmu sync.Mutex
 

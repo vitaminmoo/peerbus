@@ -483,6 +483,7 @@ func (m *Mesh) register(l *Link) {
 		old.close()
 		m.mu.Lock()
 	}
+	l.since = time.Now()
 	m.links[l.handle] = l
 	m.mu.Unlock()
 	m.log.Printf("%s %s via %s", m.describe(l), map[bool]string{true: "connected", false: "accepted"}[!l.conn.Inbound], l.conn.Path)
@@ -681,7 +682,7 @@ func (m *Mesh) notice(kind, text string, meta map[string]string) {
 // Views lists the sessions connected right now that we're allowed to see.
 func (m *Mesh) Views() []proto.PeerView {
 	m.mu.Lock()
-	links := m.snapshot()
+	links := newestPerSession(m.snapshot())
 	m.mu.Unlock()
 	var out []proto.PeerView
 	for _, l := range links {
@@ -712,6 +713,34 @@ func (m *Mesh) Views() []proto.PeerView {
 		}
 		return out[i].Address < out[j].Address
 	})
+	return out
+}
+
+// newestPerSession keeps one link per session (key and session id): the
+// newest. Another is a connection to a process that died without closing
+// it (it lingers until the idle timeout) or a second copy of the session
+// that is about to leave (see checkTwin); either way it isn't the one to
+// talk to, and showing both would make the address ambiguous.
+func newestPerSession(links []*Link) []*Link {
+	type id struct{ key, sid string }
+	newest := map[id]*Link{}
+	var out []*Link
+	for _, l := range links {
+		l.mu.Lock()
+		kind, sid := l.kind, l.info.SID
+		l.mu.Unlock()
+		if kind != proto.KindSession || sid == "" {
+			out = append(out, l)
+			continue
+		}
+		k := id{string(l.key), sid}
+		if cur := newest[k]; cur == nil || l.since.After(cur.since) {
+			newest[k] = l
+		}
+	}
+	for _, l := range newest {
+		out = append(out, l)
+	}
 	return out
 }
 

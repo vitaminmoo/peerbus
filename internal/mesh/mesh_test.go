@@ -628,9 +628,12 @@ func TestDuplicateSessionLeaves(t *testing.T) {
 	}
 
 	waitFor(t, "one deob left", func() bool {
+		other.mu.Lock()
+		links := other.snapshot()
+		other.mu.Unlock()
 		count := 0
-		for _, v := range other.Views() {
-			if v.Address == "alice/deob#d1d1d1" {
+		for _, l := range links {
+			if l.Info().SID == "d1d1d1d1" {
 				count++
 			}
 		}
@@ -641,5 +644,51 @@ func TestDuplicateSessionLeaves(t *testing.T) {
 	}
 	if !sees(old, "alice/other#o1o1o1") {
 		t.Fatal("original lost its links")
+	}
+}
+
+// A session that died without closing its connection lingers on the other
+// side until the idle timeout. When it comes back (same session id, new
+// process, maybe a new name), the stale link must not make its address
+// ambiguous or show up twice.
+func TestStaleLinkToRestartedSession(t *testing.T) {
+	srv := server(t)
+	alice, bob := store(t, "alice"), store(t, "bob")
+	pair(t, alice, bob)
+	a1, _ := start(t, alice, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "a1a1a1a1", Name: "one", Host: "h", Status: "idle"})
+	start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "poly-44", Host: "h", Status: "idle"})
+	waitFor(t, "alice to see bob", func() bool { return sees(a1, "bob/poly-44#b1b1b1") })
+
+	a1.mu.Lock()
+	peer := a1.peers.ByName("bob")
+	a1.mu.Unlock()
+	stale := &Link{
+		m: a1, conn: &transport.Conn{Path: "direct 192.0.2.1:1"}, key: pub(t, bob), peer: peer, kind: proto.KindSession,
+		info:  proto.SessionInfo{SID: "b1b1b1b1", Name: "poly-6d", Host: "h", Status: "idle"},
+		since: time.Now().Add(-time.Minute), done: make(chan struct{}), pending: map[string]chan proto.Frame{},
+	}
+	stale.handle[0] = 0xee
+	stale.once.Do(func() {}) // nothing real to close
+	a1.mu.Lock()
+	a1.links[stale.handle] = stale
+	a1.mu.Unlock()
+	t.Cleanup(func() { a1.mu.Lock(); delete(a1.links, stale.handle); a1.mu.Unlock() })
+
+	for _, to := range []string{"bob/poly-44#b1b1b1", "bob/#b1b1b1", "bob/poly-44"} {
+		if l := a1.resolveLink(t, to); l == stale {
+			t.Fatalf("%s resolved to the stale link", to)
+		}
+	}
+	n := 0
+	for _, v := range a1.Views() {
+		if v.Ref == "b1b1b1" {
+			n++
+			if v.Name != "poly-44" {
+				t.Fatalf("listed the stale link: %+v", v)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("bob's session listed %d times", n)
 	}
 }

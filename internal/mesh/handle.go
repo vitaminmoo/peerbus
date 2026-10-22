@@ -600,6 +600,7 @@ func (m *Mesh) resolve(to string) (target, error) {
 			cands = append(cands, l)
 		}
 	}
+	cands = newestPerSession(cands)
 	switch len(cands) {
 	case 1:
 		return target{link: cands[0], peer: peer, user: user}, nil
