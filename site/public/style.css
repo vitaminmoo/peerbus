@@ -259,6 +259,9 @@ h3 {
   overflow: visible;
 }
 
+/* the last block in a terminal clears the casing's bottom edge */
+.seq pre.t.end { padding-bottom: calc(var(--edge) + .9rem); }
+
 .seq .t .c { color: var(--phosphor-dim); text-shadow: none; }
 .seq .t .p { color: var(--phosphor-hi); }
 

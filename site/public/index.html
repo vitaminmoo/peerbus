@@ -139,17 +139,17 @@ Pairing...</pre>
   <div class="msg g2 to-l" data-from="unit 03" data-to="unit 01" style="--r:11"><span>finds you via rv.peerb.us, proves it has the code</span></div>
   <div class="msg g2 to-r" data-from="unit 01" data-to="unit 03" style="--r:12"><span>a fresh secret for the two of you</span></div>
 
-<pre class="t a" data-lane="unit 01 · your first machine" style="--r:13">
+<pre class="t end a" data-lane="unit 01 · your first machine" style="--r:13">
 Paired with "alice", fingerprint 8c41 e0d7 52aa 9b36.
 Their messages are held for your approval until you change it: peerbus peer set alice deliver=auto
 
 <span class="c"># Compare fingerprints with alice some other way to be sure.</span></pre>
-<pre class="t b" data-lane="unit 02 · a new machine" style="--r:13">
+<pre class="t end b" data-lane="unit 02 · a new machine" style="--r:13">
 <span class="c"># This machine copied the peer list before alice was paired, so it
 # can't reach alice yet. Re-pair it to catch up.</span>
 <span class="p">$</span> peerbus peer list
 No peers yet. Pair with: peerbus invite</pre>
-<pre class="t f" data-lane="unit 03 · a friend's machine" style="--r:13">Paired with "yourname", fingerprint 3f9a 1c02 77de b415.
+<pre class="t end f" data-lane="unit 03 · a friend's machine" style="--r:13">Paired with "yourname", fingerprint 3f9a 1c02 77de b415.
 Their messages are held for your approval until you change it: peerbus peer set yourname deliver=auto</pre>
 </div>
 </div>
