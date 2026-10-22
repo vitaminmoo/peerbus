@@ -79,8 +79,6 @@ launch:
 claude --dangerously-load-development-channels server:peerbus
 ```
 
-Servers loaded with `--mcp-config` don't count for `server:` channel entries.
-
 Sessions on one machine now see each other. For more machines and for
 friends:
 

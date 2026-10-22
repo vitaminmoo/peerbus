@@ -199,10 +199,6 @@ pre {
   box-shadow: inset 0 0 0 1px var(--casing-lo), inset 0 0 24px rgb(0 0 0 / .6);
 }
 
-pre.diagram {
-  font-size: .78em;
-}
-
 /* a caution plate */
 .note {
   position: relative;
@@ -252,6 +248,41 @@ tbody tr:nth-child(even) { background: rgb(128 112 80 / .06); }
 
 dt { margin-top: .8rem; }
 dd { margin: .2rem 0 0 1.25rem; }
+
+li { margin: .3rem 0; }
+ul { padding-left: 1.25rem; }
+li::marker { color: var(--orange); }
+
+/* a spec sheet: stencilled labels beside their values */
+dl.spec {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr;
+  margin: 1.25rem 0;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: var(--panel);
+}
+dl.spec dt, dl.spec dd {
+  margin: 0;
+  padding: .6rem .8rem;
+  border-top: 1px solid var(--rule);
+}
+dl.spec dt:first-of-type, dl.spec dt:first-of-type + dd { border-top: 0; }
+dl.spec dt {
+  border-right: 1px solid var(--rule);
+  color: var(--muted);
+  font: 700 .7rem/1.9 var(--mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+dl.spec dd { font-size: .93rem; }
+@media (max-width: 40rem) {
+  dl.spec { grid-template-columns: 1fr; }
+  dl.spec dt { border-right: 0; padding-bottom: 0; }
+  dl.spec dd { border-top: 0; padding-top: .2rem; }
+  dl.spec dt:first-of-type { border-top: 0; }
+  dl.spec dt + dd ~ dt { border-top: 1px solid var(--rule); }
+}
 
 footer {
   margin-top: 3rem;
