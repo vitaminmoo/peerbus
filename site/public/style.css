@@ -7,6 +7,10 @@
   --link: #1f5fa8;
   --note-bg: #fff6dc;
   --note-rule: #e8cf86;
+  --lane-a: #1f5fa8;
+  --lane-b: #2f7d4f;
+  --lane-f: #b0601a;
+  --arrow: #8a8478;
   color-scheme: light dark;
 }
 
@@ -20,6 +24,10 @@
     --link: #8ab4f0;
     --note-bg: #2a2516;
     --note-rule: #5c4f25;
+    --lane-a: #8ab4f0;
+    --lane-b: #7cc79a;
+    --lane-f: #e9a86a;
+    --arrow: #77736b;
   }
 }
 
@@ -117,6 +125,124 @@ th, td {
 }
 
 th { font-weight: 600; }
+
+h3 {
+  font-size: 1.05rem;
+  margin: 2rem 0 .5rem;
+}
+
+/* Sequence diagram: one column per machine or person, time running down. */
+
+.seq {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: auto;
+  margin: 1.5rem 0 2rem;
+  font-size: .9rem;
+  line-height: 1.4;
+}
+
+.seq .a { grid-column: 1; --c: var(--lane-a); }
+.seq .b { grid-column: 2; --c: var(--lane-b); }
+.seq .f { grid-column: 3; --c: var(--lane-f); }
+
+.seq .lane, .seq .step, .seq .msg { grid-row: var(--r); }
+
+.seq .life {
+  grid-row: var(--from) / 17;
+  justify-self: center;
+  width: 0;
+  border-left: 2px solid var(--c);
+  opacity: .35;
+}
+
+.seq .lane {
+  justify-self: center;
+  align-self: end;
+  z-index: 1;
+  padding: .15rem .6rem;
+  margin-top: .5rem;
+  border: 1.5px solid var(--c);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--c);
+  font-weight: 600;
+  font-size: .85rem;
+  white-space: nowrap;
+}
+
+.seq .step {
+  z-index: 1;
+  margin: .4rem .35rem;
+  padding: .5rem .65rem;
+  background: var(--bg);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--c);
+  border-radius: 5px;
+}
+
+.seq .step p { margin: .15rem 0; }
+.seq .step code { font-size: .85em; overflow-wrap: anywhere; }
+.seq .step.later { border-style: dashed; border-top-style: solid; color: var(--muted); }
+
+.seq .msg {
+  position: relative;
+  z-index: 1;
+  padding: .1rem 0 .9rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: .8rem;
+  --inset: 25%;
+}
+
+.seq .msg.ab, .seq .msg.ba { grid-column: 1 / 3; }
+.seq .msg.af, .seq .msg.fa { grid-column: 1 / 4; --inset: 16.667%; }
+
+.seq .msg span {
+  display: inline-block;
+  max-width: calc(100% - 2 * var(--inset));
+  padding: 0 .4rem;
+  background: var(--bg);
+}
+
+/* the line */
+.seq .msg::before {
+  content: "";
+  position: absolute;
+  left: var(--inset);
+  right: var(--inset);
+  bottom: .55rem;
+  border-top: 1.5px solid var(--arrow);
+}
+
+/* the arrowhead */
+.seq .msg::after {
+  content: "";
+  position: absolute;
+  bottom: calc(.55rem - 4.25px);
+  border: 5px solid transparent;
+}
+.seq .msg.ab::after, .seq .msg.af::after { right: var(--inset); border-right: 0; border-left: 8px solid var(--arrow); }
+.seq .msg.ba::after, .seq .msg.fa::after { left: var(--inset); border-left: 0; border-right: 8px solid var(--arrow); }
+
+@media (max-width: 40rem) {
+  .seq { display: block; }
+  .seq .life, .seq .lane { display: none; }
+  .seq .step { margin: .5rem 0; }
+  .seq .step.b { margin-left: 1rem; }
+  .seq .step.f { margin-left: 2rem; }
+  .seq .step::before {
+    content: attr(data-lane);
+    display: block;
+    color: var(--c);
+    font-weight: 600;
+    font-size: .8rem;
+  }
+  .seq .msg { padding: 0 0 0 1rem; text-align: left; }
+  .seq .msg::after { content: none; }
+  .seq .msg::before { content: attr(data-from) " → " attr(data-to) ": "; position: static; border: 0; }
+  .seq .msg span { display: inline; max-width: none; padding: 0; }
+}
 
 dt { margin-top: .8rem; }
 dd { margin: .2rem 0 0 1.25rem; }

@@ -18,14 +18,13 @@
 
 <p>Claude Code can already pass messages between sessions that run under one account on one machine. peerbus extends that to your other accounts, your laptop and server, and people you choose to pair with. A message reaches a busy session between tool calls and starts a new turn in an idle one, the same as the built-in messaging.</p>
 
-<p class="note">Early software. Commands and file formats will change. The public rendezvous server is one small box on a home connection.</p>
+<p class="note">Early software. Commands and file formats will change. It depends on Claude Code features that aren't meant for everyday use yet: channels are a research preview, and loading this one takes the <code>--dangerously-load-development-channels</code> flag.</p>
 
 <nav>
   <a href="#how">How it works</a>
   <a href="#install">Install</a>
   <a href="#machine">One machine</a>
-  <a href="#devices">Your machines</a>
-  <a href="#friends">Friends</a>
+  <a href="#devices">Machines and friends</a>
   <a href="#perms">Permissions</a>
   <a href="#claude">In Claude</a>
   <a href="#cli">From the shell</a>
@@ -79,31 +78,67 @@ CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus chann
 
 <pre><code>peerbus id -name yourname</code></pre>
 
-<h2 id="devices">Your machines</h2>
+<h2 id="devices">Your machines and friends</h2>
 
-<p>Your machines share one identity, so friends pair with you once rather than once per machine. On a machine that already has your identity:</p>
+<p>Your machines share one identity, so friends pair with you once rather than once per machine. Here's a second machine joining, then a friend, with time running down the page:</p>
 
-<pre><code>peerbus invite -self</code></pre>
+<div class="seq" role="group" aria-label="Pairing a second machine, then a friend">
+  <div class="life a" style="--from:2"></div>
+  <div class="life b" style="--from:4"></div>
+  <div class="life f" style="--from:11"></div>
 
-<p>That prints a code and waits. On the new machine, after installing peerbus:</p>
+  <div class="lane a" style="--r:1">Your first machine</div>
+  <div class="step a" data-lane="Your first machine" style="--r:2">
+    <code>peerbus id -name yourname</code>
+    <p>Already set up as in <a href="#machine">one machine</a>. Then:</p>
+    <code>peerbus invite -self</code>
+    <p>Prints a code and waits.</p>
+  </div>
 
-<pre><code>peerbus pair pb1-…</code></pre>
+  <div class="lane b" style="--r:3">A new machine</div>
+  <div class="step b" data-lane="A new machine" style="--r:4"><p>Install peerbus.</p></div>
+  <div class="msg ab" data-from="first machine" data-to="new machine" style="--r:5"><span>the code, copied by you</span></div>
+  <div class="step b" data-lane="A new machine" style="--r:6">
+    <code>peerbus pair pb1-…</code>
+    <p>Asks before taking your identity.</p>
+  </div>
+  <div class="msg ba" data-from="new machine" data-to="first machine" style="--r:7"><span>meets it via rv.peerb.us, proves it has the code</span></div>
+  <div class="msg ab" data-from="first machine" data-to="new machine" style="--r:8"><span>your identity key and peer list</span></div>
 
-<p>The new machine receives your identity key and your peer list. Pairing refuses to overwrite a machine that already has peers of its own unless you pass <code>-force</code>. Both machines talk to the rendezvous server to find each other; see <a href="#server">running your own</a> if you'd rather not use <code>rv.peerb.us</code>.</p>
+  <div class="step a" data-lane="Your first machine" style="--r:9"><p>“Your other device is paired.”</p></div>
+  <div class="step b" data-lane="A new machine" style="--r:9"><p>“This machine is now one of your devices.”</p></div>
 
-<p>Once a session is running on each machine, <code>peerbus peers</code> on either shows both.</p>
+  <div class="lane f" style="--r:10">A friend</div>
+  <div class="step a" data-lane="Your first machine" style="--r:11">
+    <code>peerbus invite</code>
+    <p>Prints a code and waits.</p>
+  </div>
+  <div class="step f" data-lane="A friend" style="--r:11"><p>Installs peerbus.</p></div>
+  <div class="msg af" data-from="you" data-to="friend" style="--r:12"><span>the code, sent somewhere private</span></div>
+  <div class="step f" data-lane="A friend" style="--r:13"><code>peerbus pair pb1-…</code></div>
+  <div class="msg fa" data-from="friend" data-to="first machine" style="--r:14"><span>meets you via rv.peerb.us, proves it has the code</span></div>
+  <div class="msg af" data-from="first machine" data-to="friend" style="--r:15"><span>a fresh secret for the two of you</span></div>
 
-<h2 id="friends">Friends</h2>
+  <div class="step a" data-lane="Your first machine" style="--r:16"><p>“Paired with "alice", fingerprint …”</p></div>
+  <div class="step b later" data-lane="A new machine" style="--r:16"><p>Doesn't know alice yet. <a href="#friends">Re-pair</a> to copy the new peer list.</p></div>
+  <div class="step f" data-lane="A friend" style="--r:16"><p>“Paired with "yourname", fingerprint …”</p></div>
+</div>
 
-<pre><code>peerbus invite</code></pre>
+<h3>Your machines</h3>
 
-<p>Send them the code somewhere private. Anyone holding it can pair as them until it's used. Codes work once and expire after 15 minutes (<code>-ttl</code> changes that). They run:</p>
+<p>Pairing refuses to overwrite a machine that already has peers of its own unless you pass <code>-force</code>. Both machines talk to the rendezvous server to find each other; see <a href="#server">running your own</a> if you'd rather not use <code>rv.peerb.us</code>.</p>
 
-<pre><code>peerbus pair pb1-…</code></pre>
+<p>Once a session is running on each machine, <code>peerbus peers</code> on either shows both. <code>peerbus peer list</code> stays empty: it lists other people, and your machines are all you.</p>
+
+<h3 id="friends">Friends</h3>
+
+<p>Anyone holding an invite code can pair as them until it's used. Codes work once and expire after 15 minutes (<code>-ttl</code> changes that).</p>
 
 <p>Both sides print the other's fingerprint. If you want to be sure nobody swapped the code in transit, compare fingerprints some other way; <code>peerbus id</code> shows yours.</p>
 
 <p>Their sessions appear in <code>list_peers</code> and <code>peerbus peers</code> under the name you gave them, within a few seconds, without restarting anything. The first message either Claude sends the other is held for a human to approve; see <a href="#perms">permissions</a> for how to loosen that.</p>
+
+<p>Your machines don't sync peers with each other. A friend reaches the machines that had them in their peer list when they last paired. To catch another machine up, run <code>peerbus invite -self</code> on one that has the friend and <code>peerbus pair -force pb1-…</code> on the other.</p>
 
 <p>Manage peers with <code>peerbus peer</code>:</p>
 
