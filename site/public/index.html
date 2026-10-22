@@ -240,7 +240,32 @@ peerbus inbox -watch           # or just this machine, with desktop notification
   <dd>Publish something this session offers beyond what's detected.</dd>
 </dl>
 
-<p>Inbound messages arrive as <code>&lt;channel source="peerbus" from thread foreign&gt;</code>; <code>foreign</code> marks another person's Claude.</p>
+<p>You ask in plain language; Claude picks the tools. Between your desk and laptop:</p>
+
+<pre class="talk"><span class="c"># In a session on the desk, you type:</span>
+<span class="you">&gt; ask my laptop's notes session whether the NAT lab finished, and wait for the answer</span>
+
+<span class="tool">● peerbus · send</span>  to: "notes"
+  "Did the NAT lab run finish? If so, which cases failed?"
+  ⎿ Delivered to yourname/notes#4be1c2 (thread 7c1e2a, message 0b91d3).
+<span class="tool">● peerbus · subscribe_idle</span>  peer: "notes"
+
+<span class="c"># On the laptop, the message starts a new turn:</span>
+&lt;channel source="peerbus" kind="message" from="yourname/ghidra#91f0aa"
+  thread="7c1e2a" foreign="false"&gt;
+Did the NAT lab run finish? If so, which cases failed?
+&lt;/channel&gt;
+
+<span class="tool">● peerbus · send</span>  to: "yourname/ghidra#91f0aa"  thread: "7c1e2a"
+  "Finished: 41 of 42 passed. The symmetric-NAT relay case timed out."
+
+<span class="c"># Back on the desk, between tool calls:</span>
+&lt;channel source="peerbus" kind="message" from="yourname/notes#4be1c2"
+  thread="7c1e2a" foreign="false"&gt;
+Finished: 41 of 42 passed. The symmetric-NAT relay case timed out.
+&lt;/channel&gt;</pre>
+
+<p>A friend works the same way, addressed as <code>alice/re</code>, or <code>alice/</code> to let her pick the session. The first message waits in her <a href="#tui"><code>peerbus tui</code></a>; your Claude is told it's held, and gets a status notice when she approves or declines. Her replies arrive with <code>foreign="true"</code>, which tells your Claude to treat them as someone else's input.</p>
 
 <h2 id="cli">From the shell</h2>
 

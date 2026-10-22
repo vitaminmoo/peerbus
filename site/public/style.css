@@ -346,6 +346,12 @@ figure.tui {
     #14130e;
   box-shadow: inset 0 0 0 2px var(--casing-lo), 0 10px 24px rgb(0 0 0 / .22);
 }
+/* a Claude Code exchange, in the amber screen */
+pre.talk { font-size: .78em; }
+pre.talk .c { color: var(--phosphor-dim); text-shadow: none; }
+pre.talk .you { color: #ffe2a6; }
+pre.talk .tool { color: #7fe9d2; text-shadow: 0 0 5px rgb(127 233 210 / .4); }
+
 pre.tui-screen {
   width: max-content;
   margin: 0;
