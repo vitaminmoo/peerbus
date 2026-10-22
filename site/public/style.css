@@ -181,7 +181,10 @@ h3 {
 .seq .g1 { grid-column: 2; }
 .seq .g2 { grid-column: 4; }
 
-.seq .bar, .seq .t, .seq .msg { grid-row: var(--r); }
+.seq .bar, .seq .t { grid-row: var(--r); }
+/* an arrow beside a unit plate spans the row below too, so its label
+   doesn't make the plate taller */
+.seq .msg { grid-row: var(--r) / span var(--span, 1); }
 
 /* the casing and screen, behind each terminal's rows */
 .seq .term {
@@ -202,6 +205,7 @@ h3 {
 /* the unit plate */
 .seq .bar {
   position: relative;
+  align-self: start;
   z-index: 1;
   padding: .55rem 2.2rem .55rem 4.1rem;
   border-radius: 7px 7px 0 0;
