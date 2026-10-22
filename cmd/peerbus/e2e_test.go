@@ -242,7 +242,9 @@ func writeRegistry(t *testing.T, u *user, name, sid, status string) {
 
 func writeRegistryName(t *testing.T, u *user, file, sid, name, status string) {
 	t.Helper()
-	b, _ := json.Marshal(map[string]any{"pid": 1, "sessionId": sid, "cwd": u.state, "name": name, "status": status})
+	// No pid: there's no Claude Code process whose flags the channel could
+	// check, so it joins as when they can't be read.
+	b, _ := json.Marshal(map[string]any{"sessionId": sid, "cwd": u.state, "name": name, "status": status})
 	path := filepath.Join(u.state, file+".registry.json")
 	os.MkdirAll(u.state, 0o700)
 	if err := os.WriteFile(path+".tmp", b, 0o600); err != nil {
