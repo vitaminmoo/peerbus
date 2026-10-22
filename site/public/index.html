@@ -24,6 +24,7 @@
   <a href="#install">Install</a>
   <a href="#devices">Machines and friends</a>
   <a href="#perms">Permissions</a>
+  <a href="#tui">Held messages</a>
   <a href="#claude">In Claude</a>
   <a href="#cli">Shell</a>
   <a href="#security">Security</a>
@@ -199,6 +200,29 @@ peerbus peer rm alice</code></pre>
 <h3 id="tui">Held messages</h3>
 
 <p>Your Claude only hears that something is waiting, never what it says. You handle it in <code>peerbus tui</code>: every held message on all your machines, in full, to approve, decline, or route to any of your sessions on any machine. It also shows messages sent to you as a person, and your own waiting on <code>send=ask</code>.</p>
+
+<figure class="tui">
+  <div class="tui-bar">peerbus tui · held messages, every machine</div>
+  <div class="tui-scroll"><pre class="tui-screen" role="img" aria-label="peerbus tui: three queues of held messages on the left, the selected message from alice to ghidra on the desk on the right, with approve, route, decline and quit keys along the bottom"><span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">▚▚▚ PEERBUS ▸ INBOX</span><span style="background:#d6ceb6"> </span>                                 <span style="color:#8c8577">yourname · 2 machines · 2 sessions  </span><span style="color:#3f9a8e;font-weight:700">●</span> live
+<span style="color:#d9a520">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span style="color:#e2772b">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span style="color:#c9443a">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span><span style="color:#3f9a8e">▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀</span>
+<span style="color:#e2772b">▚▚</span> <span style="color:#8c8577;font-weight:700">HELD FOR A SESSION</span> <span style="color:#8c8577">1</span>                 <span style="color:#8c8577;font-weight:700">FROM   </span>alice/re#8c41aa
+<span style="color:#2c2a22;background:#e2772b;font-weight:700">▸ alice → ghidra@desk              2m </span>  <span style="color:#8c8577;font-weight:700">TO     </span>yourname/ghidra#d1d1d1<span style="color:#8c8577">  ghidra@desk</span>
+                                        <span style="color:#8c8577;font-weight:700">HELD   </span>on desk · 2m ago · thread 7c1e2a
+<span style="color:#d9a520">▚▚</span> <span style="color:#8c8577;font-weight:700">FOR YOU · PICK A SESSION</span> <span style="color:#8c8577">1</span>
+  bob → you                       now   <span style="color:#d6ceb6">┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</span>
+                                        <span style="color:#d6ceb6">┃</span> <span style="color:#f3b349">can I borrow ghidra for the d2 binary?              </span> <span style="color:#d6ceb6">┃</span>
+<span style="color:#3f9a8e">▚▚</span> <span style="color:#8c8577;font-weight:700">YOURS · WAITING TO SEND</span> <span style="color:#8c8577">1</span>            <span style="color:#d6ceb6">┃</span> <span style="color:#f3b349">I&#x27;ll send the sample offset table next.             </span> <span style="color:#d6ceb6">┃</span>
+  ghidra@desk → alice              5m   <span style="color:#d6ceb6">┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛</span>
+
+
+
+
+
+
+<span style="color:#3f9a8e;font-weight:700"> delivered to yourname/notes#4be1c2</span>
+<span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">↑↓</span><span style="background:#d6ceb6"> </span> <span style="color:#8c8577">move</span>  <span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">a</span><span style="background:#d6ceb6"> </span> <span style="color:#8c8577">approve</span>  <span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">r</span><span style="background:#d6ceb6"> </span> <span style="color:#8c8577">route</span>  <span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">d</span><span style="background:#d6ceb6"> </span> <span style="color:#8c8577">decline</span>  <span style="background:#d6ceb6"> </span><span style="color:#2c2a22;background:#d6ceb6;font-weight:700">q</span><span style="background:#d6ceb6"> </span> <span style="color:#8c8577">quit</span></pre></div>
+  <figcaption><kbd>a</kbd> approve where it was sent · <kbd>r</kbd> route to any session on any machine · <kbd>d</kbd> decline, and the sender is told</figcaption>
+</figure>
 
 <pre><code>peerbus tui
 peerbus inbox -watch           # or just this machine, with desktop notifications</code></pre>

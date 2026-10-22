@@ -79,8 +79,9 @@ func (m *model) View() string {
 }
 
 func (m *model) header(w int) string {
-	title := hazard(cInk, 3) + " PEERBUS ▸ INBOX"
-	left := plate.Render(title)
+	// plain text inside the plate: a nested style's reset would drop the
+	// plate's background for the rest of the title
+	left := plate.Render("▚▚▚ PEERBUS ▸ INBOX")
 	sessions := len(m.sessions)
 	live := good.Render("●") + " live"
 	if !m.loaded {
