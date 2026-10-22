@@ -608,3 +608,38 @@ func TestRemoteApproveAndRoute(t *testing.T) {
 		t.Fatal("a friend used deliver")
 	}
 }
+
+// A conversation resumed in a second Claude Code process shares the first
+// one's session id. The newer copy leaves the mesh and says why; the older
+// one stays reachable under the one address.
+func TestDuplicateSessionLeaves(t *testing.T) {
+	srv := server(t)
+	alice := store(t, "alice")
+	state := t.TempDir()
+
+	old, _ := start(t, alice, state, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "deob", Host: "h", Status: "waiting", Started: 1000, PID: 4242})
+	other, _ := start(t, alice, state, srv, proto.KindSession, proto.SessionInfo{SID: "o1o1o1o1", Name: "other", Host: "h", Status: "idle", Started: 1500})
+	waitFor(t, "other to see the original", func() bool { return sees(other, "alice/deob#d1d1d1") })
+
+	_, evNew := start(t, alice, state, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "deob", Host: "h", Status: "idle", Started: 2000, PID: 5151})
+	n := evNew.notice(t, "duplicate")
+	if !strings.Contains(n.text, "pid 4242") || !strings.Contains(n.text, "alice/deob#d1d1d1") || n.meta["pid"] != "4242" {
+		t.Fatalf("duplicate notice: %+v", n)
+	}
+
+	waitFor(t, "one deob left", func() bool {
+		count := 0
+		for _, v := range other.Views() {
+			if v.Address == "alice/deob#d1d1d1" {
+				count++
+			}
+		}
+		return count == 1
+	})
+	if l := other.resolveLink(t, "deob"); l.Info().PID != 4242 {
+		t.Fatalf("resolved to %+v, want the original", l.Info())
+	}
+	if !sees(old, "alice/other#o1o1o1") {
+		t.Fatal("original lost its links")
+	}
+}

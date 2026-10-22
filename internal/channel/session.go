@@ -21,6 +21,7 @@ type registry struct {
 	Cwd       string `json:"cwd"`
 	Name      string `json:"name"`
 	Status    string `json:"status"`
+	StartedAt int64  `json:"startedAt"`
 }
 
 func claudeConfigDir() string {

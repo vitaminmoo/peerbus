@@ -78,6 +78,7 @@ type Mesh struct {
 	cancel    context.CancelFunc
 	ready     chan struct{}
 	readyOnce sync.Once
+	twinOnce  sync.Once
 
 	reloadMu sync.Mutex // one reloadPeers at a time: the loop and merges both call it
 
@@ -464,6 +465,13 @@ func (m *Mesh) handshake(c *transport.Conn, dialer bool) (*Link, error) {
 // handle, which they compute identically.
 func (m *Mesh) register(l *Link) {
 	m.mu.Lock()
+	if m.ctx.Err() != nil {
+		// Closing: Close cancels before it takes the lock to close links,
+		// so a dial finishing now must not slip in after.
+		m.mu.Unlock()
+		l.close()
+		return
+	}
 	if old := m.links[l.handle]; old != nil {
 		if bytes.Compare(m.dialerOf(old), m.dialerOf(l)) <= 0 {
 			m.mu.Unlock()
@@ -479,6 +487,7 @@ func (m *Mesh) register(l *Link) {
 	m.mu.Unlock()
 	m.log.Printf("%s %s via %s", m.describe(l), map[bool]string{true: "connected", false: "accepted"}[!l.conn.Inbound], l.conn.Path)
 	go l.readLoop()
+	m.checkTwin(l)
 	if m.syncsWith(l) {
 		m.sendPeers(l)
 	}
@@ -533,6 +542,11 @@ func (m *Mesh) Update(info proto.SessionInfo) {
 	links := m.snapshot()
 	m.mu.Unlock()
 	wentIdle := info.Status == "idle" && old.Status != "idle"
+	if info.SID != old.SID || info.Started != old.Started {
+		for _, l := range links {
+			m.checkTwin(l)
+		}
+	}
 	for _, l := range links {
 		f := m.helloFor(l.peer)
 		f.Type = proto.TUpdate
@@ -569,8 +583,59 @@ func (m *Mesh) helloFor(peer *identity.Peer) proto.Frame {
 			}
 		}
 	}
+	if peer != nil {
+		info.PID = 0
+	}
 	f.Session = &info
 	return f
+}
+
+// checkTwin steps this session off the mesh when l is another process
+// running the same Claude session (a second resume of one conversation)
+// that was there first. Two copies would share one address, so the newer
+// one leaves and tells its agent why.
+func (m *Mesh) checkTwin(l *Link) {
+	if m.cfg.Kind != proto.KindSession {
+		return
+	}
+	l.mu.Lock()
+	info, kind, peer := l.info, l.kind, l.peer
+	l.mu.Unlock()
+	m.mu.Lock()
+	me := m.info
+	m.mu.Unlock()
+	if peer != nil || kind != proto.KindSession || info.SID == "" || info.SID != me.SID {
+		return
+	}
+	// Older wins; a twin that doesn't say when it started runs an older
+	// peerbus and was most likely there first. Equal starts fall back to
+	// the handle, which both sides compare the same way.
+	older := info.Started == 0 || info.Started < me.Started
+	if info.Started == me.Started {
+		h := m.node.Handle()
+		older = bytes.Compare(l.handle[:], h[:]) < 0
+	}
+	if !older {
+		return
+	}
+	m.twinOnce.Do(func() {
+		addr := m.addr(l)
+		m.log.Printf("%s is already running in another process (pid %d); leaving the mesh", addr, info.PID)
+		go m.Close()
+		started := "an unknown time"
+		if info.Started != 0 {
+			started = time.UnixMilli(info.Started).Format("2006-01-02 15:04:05")
+		}
+		pid, find := "pid unknown", "Find that process"
+		if info.PID != 0 {
+			pid = fmt.Sprintf("pid %d", info.PID)
+			find = fmt.Sprintf("Find that process (for example `ps -o pid,tty,lstart,args -p %d`)", info.PID)
+		}
+		m.notice("duplicate",
+			fmt.Sprintf("peerbus is off in this session: %s is already running in another Claude Code process (%s on %s, started %s, status %s). This is probably the same conversation resumed twice, and the older copy may be sitting on a question. %s and warn your user that it's still open. Once it's closed, reconnect peerbus here with /mcp.",
+				addr, pid, info.Host, started, info.Status, find),
+			map[string]string{"peer": addr, "pid": fmt.Sprint(info.PID), "host": info.Host})
+	})
 }
 
 func (m *Mesh) selfName() string {

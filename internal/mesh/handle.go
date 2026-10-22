@@ -33,6 +33,7 @@ func (m *Mesh) handle(l *Link, f proto.Frame) {
 			l.kind = f.Kind
 		}
 		l.mu.Unlock()
+		m.checkTwin(l)
 	case proto.TSend:
 		res, err := m.receive(l, f)
 		l.reply(f.Req, res, err)

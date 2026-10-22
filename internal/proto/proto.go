@@ -32,6 +32,11 @@ type SessionInfo struct {
 	Cwd       string     `json:"cwd,omitempty"`
 	Status    string     `json:"status"` // idle, busy, shell, unknown...
 	Resources []Resource `json:"resources,omitempty"`
+	// Started is when the Claude Code process started (unix ms), which a
+	// resume in a second process doesn't share. PID is that process, for
+	// your own sessions only.
+	Started int64 `json:"started,omitempty"`
+	PID     int   `json:"pid,omitempty"`
 }
 
 // PeerView is one reachable session as seen from here.
