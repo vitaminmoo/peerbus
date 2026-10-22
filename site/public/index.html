@@ -134,10 +134,12 @@ Pairing...</pre>
 <pre class="t a" data-lane="unit 01 · desk, your first machine" style="--r:13">
 Paired with &quot;alice&quot;, fingerprint 8c41 e0d7 52aa 9b36.
 Their messages are held for your approval until you change it: peerbus peer set alice deliver=auto
+Approve, route or decline held messages from any of your machines with: peerbus tui
 
 <span class="c"># Compare fingerprints with alice some other way to be sure.</span></pre>
 <pre class="t f" data-lane="unit 03 · alice, a friend" style="--r:13">Paired with &quot;yourname&quot;, fingerprint 3f9a 1c02 77de b415.
-Their messages are held for your approval until you change it: peerbus peer set yourname deliver=auto</pre>
+Their messages are held for your approval until you change it: peerbus peer set yourname deliver=auto
+Approve, route or decline held messages from any of your machines with: peerbus tui</pre>
 
   <div class="msg g1 to-l" data-from="unit 01" data-to="unit 02" style="--r:14"><span>alice&#x27;s entry, synced between your machines</span></div>
 <pre class="t b" data-lane="unit 02 · laptop, your other machine" style="--r:15">
@@ -229,43 +231,44 @@ peerbus inbox -watch           # or just this machine, with desktop notification
 
 <h2 id="claude">In Claude</h2>
 
-<dl>
-  <dt><code>list_peers</code></dt>
-  <dd>Reachable sessions: status, machine, connection path, and what each advertises (MCP servers, programs, repos). Optional filter.</dd>
-  <dt><code>send</code></dt>
-  <dd>Plain text to <code>alice/session#ref</code>, or <code>session</code> for your own; pass <code>thread</code> to reply.</dd>
-  <dt><code>subscribe_idle</code></dt>
-  <dd>One notice when a session finishes its turn or disconnects.</dd>
-  <dt><code>advertise</code></dt>
-  <dd>Publish something this session offers beyond what's detected.</dd>
-</dl>
+<p>Claude can see your other sessions and your friends', and what each one has (MCP servers, programs, repos). It can message them, reply on a thread, and wait for one to finish its turn. You ask in plain words. Your desk asking your laptop:</p>
 
-<p>You ask in plain language; Claude picks the tools. Between your desk and laptop:</p>
+<figure class="tui claude">
+  <div class="tui-bar">desk · claude code</div>
+  <div class="tui-scroll"><pre class="tui-screen talk" role="img" aria-label="A Claude Code session on the desk sends a question to the laptop's notes session, subscribes to its next idle, and later receives the answer as an inbound peerbus line, then summarises it."><span class="you">&gt; ask my laptop&#x27;s notes session whether the NAT lab finished, and wait</span>
+<span class="you">  for the answer</span>
 
-<pre class="talk"><span class="c"># In a session on the desk, you type:</span>
-<span class="you">&gt; ask my laptop's notes session whether the NAT lab finished, and wait for the answer</span>
+<span class="tool">● peerbus - send (MCP)(to: &quot;notes&quot;, text: &quot;Did the NAT lab run finish? If so,</span>
+<span class="tool">  which cases failed?&quot;)</span>
+<span class="res">  ⎿  Delivered to yourname/notes#4be1c2 (thread 7c1e2a, message 0b91d3).</span>
 
-<span class="tool">● peerbus · send</span>  to: "notes"
-  "Did the NAT lab run finish? If so, which cases failed?"
-  ⎿ Delivered to yourname/notes#4be1c2 (thread 7c1e2a, message 0b91d3).
-<span class="tool">● peerbus · subscribe_idle</span>  peer: "notes"
+<span class="tool">● peerbus - subscribe_idle (MCP)(peer: &quot;notes&quot;)</span>
+<span class="res">  ⎿  Subscribed: one notice arrives when yourname/notes#4be1c2 next goes idle</span>
+<span class="res">     or disconnects.</span>
 
-<span class="c"># On the laptop, the message starts a new turn:</span>
-&lt;channel source="peerbus" kind="message" from="yourname/ghidra#91f0aa"
-  thread="7c1e2a" foreign="false"&gt;
-Did the NAT lab run finish? If so, which cases failed?
-&lt;/channel&gt;
+<span class="say">● Asked the laptop. I&#x27;ll pass the answer on when it arrives.</span>
 
-<span class="tool">● peerbus · send</span>  to: "yourname/ghidra#91f0aa"  thread: "7c1e2a"
-  "Finished: 41 of 42 passed. The symmetric-NAT relay case timed out."
+<span class="inbound">← peerbus: Finished: 41 of 42 passed. The symmetric-NAT relay case timed out.</span>
+<span class="inbound">← peerbus: yourname/notes#4be1c2 is now idle.</span>
 
-<span class="c"># Back on the desk, between tool calls:</span>
-&lt;channel source="peerbus" kind="message" from="yourname/notes#4be1c2"
-  thread="7c1e2a" foreign="false"&gt;
-Finished: 41 of 42 passed. The symmetric-NAT relay case timed out.
-&lt;/channel&gt;</pre>
+<span class="say">● The lab finished: 41 of 42 passed. Only the symmetric-NAT relay case</span>
+<span class="say">  timed out.</span></pre></div>
+</figure>
 
-<p>A friend works the same way, addressed as <code>alice/re</code>, or <code>alice/</code> to let her pick the session. The first message waits in her <a href="#tui"><code>peerbus tui</code></a>; your Claude is told it's held, and gets a status notice when she approves or declines. Her replies arrive with <code>foreign="true"</code>, which tells your Claude to treat them as someone else's input.</p>
+<figure class="tui claude">
+  <div class="tui-bar">laptop · claude code</div>
+  <div class="tui-scroll"><pre class="tui-screen talk" role="img" aria-label="The laptop's session receives the question as an inbound peerbus line, checks the lab results, and replies on the same thread."><span class="inbound">← peerbus: Did the NAT lab run finish? If so, which cases failed?</span>
+
+<span class="tool">● Bash(tail -2 lab/results.txt)</span>
+<span class="res">  ⎿  41/42 passed</span>
+<span class="res">     FAIL symmetric-nat-relay (timeout after 30s)</span>
+
+<span class="tool">● peerbus - send (MCP)(to: &quot;yourname/ghidra#91f0aa&quot;, thread: &quot;7c1e2a&quot;, text:</span>
+<span class="tool">  &quot;Finished: 41 of 42 passed. The symmetric-NAT relay case timed out.&quot;)</span>
+<span class="res">  ⎿  Delivered to yourname/ghidra#91f0aa (thread 7c1e2a, message 5e02aa).</span></pre></div>
+</figure>
+
+<p>Your terminal shows only the first line of an incoming message, so senders lead with a summary. A friend works the same way, addressed as <code>alice/re</code>, or <code>alice/</code> to let her pick the session. The first message waits in her <a href="#tui"><code>peerbus tui</code></a>, and your Claude hears when she approves or declines. Her Claude's messages are marked as someone else's input, so yours treats them with care.</p>
 
 <h2 id="cli">From the shell</h2>
 

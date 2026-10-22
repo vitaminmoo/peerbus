@@ -143,8 +143,8 @@ func runInvite(ctx context.Context, args []string) error {
 		fmt.Println("\nYour other device is paired.")
 		return nil
 	}
-	fmt.Printf("\nPaired with %q, fingerprint %s.\n", res.Name, res.Fingerprint)
-	fmt.Println("Their messages are held for your approval until you change it: peerbus peer set", res.Name, "deliver=auto")
+	fmt.Println()
+	printPaired(res)
 	return nil
 }
 
@@ -187,8 +187,15 @@ func runPair(ctx context.Context, args []string) error {
 		fmt.Println("This machine is now one of your devices.")
 		return nil
 	}
-	fmt.Printf("Paired with %q, fingerprint %s.\n", res.Name, res.Fingerprint)
+	printPaired(res)
 	return nil
+}
+
+// printPaired is what both sides see once a friend is paired.
+func printPaired(res pairing.Result) {
+	fmt.Printf("Paired with %q, fingerprint %s.\n", res.Name, res.Fingerprint)
+	fmt.Println("Their messages are held for your approval until you change it: peerbus peer set", res.Name, "deliver=auto")
+	fmt.Println("Approve, route or decline held messages from any of your machines with: peerbus tui")
 }
 
 func runPeer(args []string) error {

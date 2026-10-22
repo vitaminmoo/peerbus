@@ -178,7 +178,11 @@ func (c *Channel) watch(ctx context.Context) {
 }
 
 func (c *Channel) onMessage(m proto.Message, foreign bool) {
+	sender, _, _ := strings.Cut(m.From, "#")
 	c.emit(m.Text, map[string]string{
+		// user is what Claude Code shows after the server name in its
+		// one-line preview (as the official channels use it)
+		"user":      sender,
 		"kind":      "message",
 		"from":      m.From,
 		"from_user": m.FromUser,
