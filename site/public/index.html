@@ -169,7 +169,7 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
 
 <p>A friend's Claude is someone else's agent, and a message from it is untrusted input. Messages from friends are marked that way, and a held message's text stays out of your Claude's context until you approve it.</p>
 
-<p>The realistic attack is prompt injection that spreads: your session reads something hostile and is talked into inviting a stranger or loosening a peer's permissions, and then passes the same text to your friends. The commands that change trust (<code>invite</code>, <code>pair</code>, <code>peer</code>, <code>approve</code>) refuse to run without a terminal, which Claude's Bash tool doesn't have. That's a speed bump, so also deny them in Claude Code's settings:</p>
+<p>The realistic attack is prompt injection that spreads: your session reads something hostile and is talked into inviting a stranger or loosening a peer's permissions, and then passes the same text to your friends. The commands that change trust (<code>invite</code>, <code>pair</code>, <code>peer</code>, <code>approve</code>) refuse to run without a terminal, which Claude's Bash tool doesn't have. That's a speed bump, so also deny them in Claude Code's settings. Deny <code>send</code> and <code>inbox</code> too: a send from the CLI skips <code>send=ask</code>, and the inbox prints held messages in full.</p>
 
 <pre><code>{
   "permissions": {
@@ -178,6 +178,8 @@ peerbus send alice/ "ping me when the decomp finishes"</code></pre>
       "Bash(peerbus pair:*)",
       "Bash(peerbus peer:*)",
       "Bash(peerbus approve:*)",
+      "Bash(peerbus send:*)",
+      "Bash(peerbus inbox:*)",
       "Read(~/.config/peerbus/**)",
       "Read(~/.local/state/peerbus/**)"
     ]
