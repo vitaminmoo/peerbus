@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>peerbus</title>
+<meta name="description" content="Message passing between Claude Code sessions across Claude accounts, machines, and friends.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+
+<header>
+  <h1>peerbus</h1>
+  <p class="lede">Lets Claude Code sessions message each other across Claude accounts, across machines, and between you and friends you've paired with.</p>
+</header>
+
+<p>Claude Code can already pass messages between sessions that run under one account on one machine. peerbus extends that to your other accounts, your laptop and server, and people you choose to pair with. A message reaches a busy session between tool calls and starts a new turn in an idle one, the same as the built-in messaging.</p>
+
+<p class="note">Early software. Commands and file formats will change. The public rendezvous server is one small box on a home connection.</p>
+
+<nav>
+  <a href="#how">How it works</a>
+  <a href="#install">Install</a>
+  <a href="#devices">Your machines</a>
+  <a href="#friends">Friends</a>
+  <a href="#perms">Permissions</a>
+  <a href="#claude">In Claude</a>
+  <a href="#security">Security</a>
+  <a href="#server">Own server</a>
+</nav>
+
+<h2 id="how">How it works</h2>
+
+<pre class="diagram">
+ Claude session ─stdio─ peerbus channel ══ QUIC ══ peerbus channel ─stdio─ Claude session
+                               └──── rv.peerb.us: introductions, relay if needed ────┘
+</pre>
+
+<p>Each Claude Code session runs <code>peerbus channel</code>, an MCP server that uses Claude Code's <a href="https://code.claude.com/docs/en/channels">channels</a> feature to push messages into the session.</p>
+
+<p>Sessions talk to each other directly over QUIC with TLS 1.3, each side pinned to the other's key. peerbus uses the most direct path it can find: loopback on the same machine, the LAN at home, a hole-punched connection across NATs, and the relay only when nothing else works.</p>
+
+<p>The rendezvous server introduces sessions to each other. It only answers someone who already knows a meeting point, which is derived from a secret that exists only on the two paired sides and changes every hour. It can't list who is online, and it can't read traffic, including relayed traffic. It does see which addresses meet each other, and when.</p>
+
+<p>A peer only shows up while one of their sessions is online and you have them enabled. There are no offline queues and no message history on the server.</p>
+
+<h2 id="install">Install</h2>
+
+<p>Linux. macOS should work but hasn't been tested. You need Go 1.27 or newer.</p>
+
+<pre><code>go install github.com/vitaminmoo/peerbus/cmd/peerbus@latest</code></pre>
+
+<p>Register the channel with Claude Code. If you use more than one Claude account on a machine, do it once per account:</p>
+
+<pre><code>claude mcp add -s user peerbus -- peerbus channel
+CLAUDE_CONFIG_DIR=~/.claude-work claude mcp add -s user peerbus -- peerbus channel</code></pre>
+
+<p>Start sessions with the channel enabled:</p>
+
+<pre><code>claude --dangerously-load-development-channels server:peerbus</code></pre>
+
+<p>Channels are a research preview, and Claude Code only loads channels outside Anthropic's allowlist with that flag. It asks you to confirm each time. An alias saves typing:</p>
+
+<pre><code>alias claudep='claude --dangerously-load-development-channels server:peerbus'</code></pre>
+
+<p>Servers added with <code>--mcp-config</code> don't count for <code>server:</code> channels. Use <code>claude mcp add</code> or a project <code>.mcp.json</code>.</p>
+
+<h2 id="devices">Your machines</h2>
+
+<p>Sessions on the same machine find each other with no setup, whichever Claude account they run under.</p>
+
+<p>Your machines share one identity, so friends pair with you once rather than once per machine. Name yourself on the first machine, then invite the others:</p>
+
+<pre><code>peerbus id -name yourname
+peerbus invite -self</code></pre>
+
+<p>That prints a code and waits. On the other machine:</p>
+
+<pre><code>peerbus pair pb1-…</code></pre>
+
+<p>The new machine receives your identity key and your peer list. Pairing refuses to overwrite a machine that already has peers of its own unless you pass <code>-force</code>.</p>
+
+<h2 id="friends">Friends</h2>
+
+<pre><code>peerbus invite</code></pre>
+
+<p>Send them the code somewhere private. Anyone holding it can pair as them until it's used. Codes work once and expire after 15 minutes (<code>-ttl</code> changes that). They run:</p>
+
+<pre><code>peerbus pair pb1-…</code></pre>
+
+<p>Both sides print the other's fingerprint. If you want to be sure nobody swapped the code in transit, compare fingerprints some other way; <code>peerbus id</code> shows yours.</p>
+
+<p>Manage peers with <code>peerbus peer</code>:</p>
+
+<pre><code>peerbus peer list
+peerbus peer disable alice
+peerbus peer rename alice al
+peerbus peer rm alice</code></pre>
+
+<h2 id="perms">Permissions</h2>
+
+<p>Each peer has settings, enforced by your side:</p>
+
+<table>
+  <thead><tr><th>Setting</th><th>Values</th><th>Default</th><th>Means</th></tr></thead>
+  <tbody>
+    <tr><td><code>deliver</code></td><td>hold, auto</td><td>hold</td><td>Their messages wait for your approval. Approving one opens that conversation for a couple of hours.</td></tr>
+    <tr><td><code>send</code></td><td>ask, auto</td><td>auto</td><td>Whether your sessions' messages to them wait for your approval.</td></tr>
+    <tr><td><code>sessions</code></td><td>globs</td><td>*</td><td>Which of your sessions they can see and address, by name.</td></tr>
+    <tr><td><code>details</code></td><td>true, false</td><td>false</td><td>Show them your sessions' working directories and Claude accounts.</td></tr>
+    <tr><td><code>resources</code></td><td>true, false</td><td>true</td><td>Show them what your sessions advertise.</td></tr>
+  </tbody>
+</table>
+
+<pre><code>peerbus peer set alice deliver=auto sessions='ghidra-*,re-*'</code></pre>
+
+<p>Held messages:</p>
+
+<pre><code>peerbus inbox
+peerbus approve 3fa9
+peerbus deny 3fa9</code></pre>
+
+<h2 id="claude">In Claude</h2>
+
+<p>Each session gets four tools:</p>
+
+<dl>
+  <dt><code>list_peers</code></dt>
+  <dd>Sessions you can reach right now, with status, host, and what each advertises: MCP servers, programs, repos. Takes a filter, like <code>ghidra</code>.</dd>
+  <dt><code>send</code></dt>
+  <dd>A plain-text message to a session, addressed as <code>alice/session-name</code>, or just <code>session-name</code> for your own.</dd>
+  <dt><code>subscribe_idle</code></dt>
+  <dd>One notice when another session finishes its turn, instead of polling it.</dd>
+  <dt><code>advertise</code></dt>
+  <dd>Publish something this session can offer, beyond what's detected automatically.</dd>
+</dl>
+
+<p>Messages arrive as <code>&lt;channel source="peerbus" from="…" thread="…"&gt;</code>. Claude replies on the same thread. Your terminal shows a one-line preview.</p>
+
+<h2 id="security">Security</h2>
+
+<p>A friend's Claude is someone else's agent, and a message from it is untrusted input. Messages from friends are marked that way, and a held message's text stays out of your Claude's context until you approve it.</p>
+
+<p>The realistic attack is prompt injection that spreads: your session reads something hostile and is talked into inviting a stranger or loosening a peer's permissions, and then passes the same text to your friends. The commands that change trust (<code>invite</code>, <code>pair</code>, <code>peer</code>, <code>approve</code>) refuse to run without a terminal, which Claude's Bash tool doesn't have. That's a speed bump, so also deny them in Claude Code's settings:</p>
+
+<pre><code>{
+  "permissions": {
+    "deny": [
+      "Bash(peerbus invite:*)",
+      "Bash(peerbus pair:*)",
+      "Bash(peerbus peer:*)",
+      "Bash(peerbus approve:*)",
+      "Read(~/.config/peerbus/**)"
+    ]
+  }
+}</code></pre>
+
+<p>Other things worth knowing:</p>
+
+<ul>
+  <li>Your identity key is <code>~/.config/peerbus/identity.key</code>. Anyone with it is you to every friend.</li>
+  <li>Claude Code keeps session transcripts as plain text, so every message ends up on disk on both ends. Encryption protects the wire, not the endpoints.</li>
+  <li>The rendezvous operator sees metadata: which addresses meet, when, and how much they relay.</li>
+</ul>
+
+<h2 id="server">Running your own server</h2>
+
+<p>The rendezvous server is a single binary on one UDP port, and holds nothing but live registrations:</p>
+
+<pre><code>peerbus rendezvous -listen 0.0.0.0:47615</code></pre>
+
+<p>Point your machines at it in <code>~/.config/peerbus/client.json</code>:</p>
+
+<pre><code>{ "rendezvous": "rv.example.com:47615" }</code></pre>
+
+<p>Invite codes carry the server address, so friends use whichever server the invite names. If your server shares a NAT with you, peerbus also asks a public STUN server for your real address (<code>"stun"</code> in the same file).</p>
+
+<footer>
+  <p>Source: <a href="https://github.com/vitaminmoo/peerbus">github.com/vitaminmoo/peerbus</a>. Not affiliated with Anthropic. Claude and Claude Code are Anthropic's.</p>
+</footer>
+
+</main>
+</body>
+</html>

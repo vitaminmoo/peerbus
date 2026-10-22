@@ -1,0 +1,6 @@
+bin/
+.serena/
+spike/p2p/p2pspike
+spike/slim/slimspike
+site/.wrangler/
+node_modules/

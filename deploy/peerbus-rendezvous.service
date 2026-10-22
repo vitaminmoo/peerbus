@@ -1,0 +1,18 @@
+[Unit]
+Description=peerbus rendezvous and relay server
+Documentation=https://github.com/vitaminmoo/peerbus
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/bin/peerbus rendezvous -listen 0.0.0.0:47615
+Restart=always
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target

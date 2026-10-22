@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "peerbus": { "command": "peerbus", "args": ["channel"] }
+  }
+}

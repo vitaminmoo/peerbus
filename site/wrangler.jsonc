@@ -1,0 +1,8 @@
+// Static site for peerb.us, served from Workers static assets (no script).
+// Deploy: npx wrangler@4.148.0 deploy
+{
+  "name": "peerbus-site",
+  "compatibility_date": "2026-10-01",
+  "assets": { "directory": "./public" },
+  "routes": [{ "pattern": "peerb.us", "custom_domain": true }]
+}
