@@ -164,13 +164,15 @@ h3 {
   --phosphor-dim: #a4803e;
   --phosphor-hi: #ffe2a6;
   --edge: 9px;
-  --tw: 38rem;
+  /* wide enough that no terminal line wraps: the longest is 103 columns */
+  --tw: calc(104ch + 2 * (var(--edge) + 1rem));
   --gutter: 9.5rem;
   display: grid;
   grid-template-columns: var(--tw) var(--gutter) var(--tw) var(--gutter) var(--tw);
   width: max-content;
   margin: 0 auto;
   padding: .5rem 1.5rem 1.25rem;
+  font: .78rem/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; /* sets ch for --tw */
 }
 
 .seq .b { grid-column: 1; --c: #3f9a8e; }
@@ -247,11 +249,9 @@ h3 {
   background: none;
   border-radius: 0;
   color: var(--phosphor);
-  font-size: .78rem;
-  line-height: 1.5;
+  font: inherit;
   text-shadow: 0 0 5px rgb(243 180 74 / .45);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
   overflow: visible;
 }
 
@@ -309,6 +309,8 @@ h3 {
   .seq { display: block; width: auto; padding: 0; }
   .seq .term, .seq .bar { display: none; }
   .seq pre.t {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     margin: .5rem 0;
     padding: .6rem .9rem;
     background: repeating-linear-gradient(transparent 0 2px, rgb(0 0 0 / .28) 2px 3px), var(--screen);
