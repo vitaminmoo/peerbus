@@ -54,10 +54,13 @@ func ClientPath() string { return filepath.Join(Dir(), "client.json") }
 type Client struct {
 	// Rendezvous is the server that introduces sessions on different
 	// machines. "none" keeps sessions to this machine.
-	Rendezvous string           `json:"rendezvous,omitempty"`
-	STUN       []string         `json:"stun,omitempty"`
-	Resources  []ClientResource `json:"resources,omitempty"`
-	Programs   []string         `json:"programs,omitempty"` // advertised when found on PATH
+	Rendezvous string   `json:"rendezvous,omitempty"`
+	STUN       []string `json:"stun,omitempty"`
+	// Machine is what this machine's sessions are listed under, and what
+	// "host/session" permission globs match. Defaults to the hostname.
+	Machine   string           `json:"machine,omitempty"`
+	Resources []ClientResource `json:"resources,omitempty"`
+	Programs  []string         `json:"programs,omitempty"` // advertised when found on PATH
 }
 
 type ClientResource struct {
@@ -79,6 +82,26 @@ func LoadClient() (*Client, error) {
 		c.STUN = DefaultSTUN
 	}
 	return &c, nil
+}
+
+// UpdateClient applies fn to client.json as stored, without the defaults
+// LoadClient fills in.
+func UpdateClient(fn func(*Client)) error {
+	var c Client
+	if err := ReadJSON(ClientPath(), &c); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	fn(&c)
+	return WriteJSON(ClientPath(), &c)
+}
+
+// MachineName is Machine, or the hostname when it isn't set.
+func (c *Client) MachineName() string {
+	if c.Machine != "" {
+		return c.Machine
+	}
+	h, _ := os.Hostname()
+	return h
 }
 
 // Server is the rendezvous address to use, or empty for none.

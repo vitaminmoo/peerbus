@@ -12,7 +12,8 @@ import (
 )
 
 // Peers is peers.json: your own devices' shared state and everyone you've
-// paired with.
+// paired with. Your machines keep it in sync with each other (see Merge),
+// so a friend paired on one reaches all of them.
 type Peers struct {
 	Self  Self    `json:"self"`
 	Peers []*Peer `json:"peers"`
@@ -21,6 +22,8 @@ type Peers struct {
 type Self struct {
 	// Name is what you suggest others call you when pairing.
 	Name string `json:"name,omitempty"`
+	// NameUpdated is when Name last changed, for syncing.
+	NameUpdated time.Time `json:"nameUpdated,omitempty"`
 	// Secret is shared by all your devices; your sessions meet under it.
 	Secret Secret `json:"secret"`
 }
@@ -32,6 +35,34 @@ type Peer struct {
 	Enabled  bool      `json:"enabled"`
 	Perms    Perms     `json:"perms"`
 	PairedAt time.Time `json:"pairedAt"`
+	// Updated is when this entry last changed on any of your machines; the
+	// latest change wins when they sync.
+	Updated time.Time `json:"updated,omitempty"`
+	// Removed marks a forgotten peer. The entry stays for a while so the
+	// removal reaches machines that still have them.
+	Removed bool `json:"removed,omitempty"`
+}
+
+// tombstoneTTL is how long a removed peer's entry is kept for syncing.
+const tombstoneTTL = 90 * 24 * time.Hour
+
+// changed is when p last changed; entries from before syncing existed
+// count from when they were paired.
+func (p *Peer) changed() time.Time {
+	if p.Updated.IsZero() {
+		return p.PairedAt
+	}
+	return p.Updated
+}
+
+// Touch records that p changed now.
+func (p *Peer) Touch() { p.Updated = time.Now().UTC() }
+
+// Remove forgets p everywhere: it can't connect, and the removal syncs to
+// your other machines.
+func (p *Peer) Remove() {
+	p.Removed, p.Enabled, p.Secret = true, false, Secret{}
+	p.Touch()
 }
 
 // Perms is what a peer may do; the receiving side enforces it.
@@ -42,7 +73,9 @@ type Perms struct {
 	// Send is "auto" or "ask" (your sessions' messages to them wait for your
 	// approval).
 	Send string `json:"send"`
-	// Sessions are globs over your session names that they may address.
+	// Sessions are globs over your session names that they may address. A
+	// glob containing "/" matches "host/name" instead, so "laptop/*" means
+	// every session on one machine.
 	Sessions []string `json:"sessions"`
 	// ShowDetails lets them see your sessions' cwd and Claude account.
 	ShowDetails bool `json:"showDetails"`
@@ -70,10 +103,14 @@ func (p Perms) Validate() error {
 	return nil
 }
 
-// MaySee reports whether a session name matches the peer's Sessions globs.
-func (p Perms) MaySee(session string) bool {
+// MaySee reports whether a session matches the peer's Sessions globs.
+func (p Perms) MaySee(host, session string) bool {
 	for _, g := range p.Sessions {
-		if ok, _ := path.Match(g, session); ok {
+		s := session
+		if strings.Contains(g, "/") {
+			s = host + "/" + session
+		}
+		if ok, _ := path.Match(g, s); ok {
 			return true
 		}
 	}
@@ -82,6 +119,14 @@ func (p Perms) MaySee(session string) bool {
 
 // ByKey finds the peer with a key.
 func (ps *Peers) ByKey(k ed25519.PublicKey) *Peer {
+	if p := ps.entry(k); p != nil && !p.Removed {
+		return p
+	}
+	return nil
+}
+
+// entry finds the entry with a key, removed or not.
+func (ps *Peers) entry(k ed25519.PublicKey) *Peer {
 	for _, p := range ps.Peers {
 		if p.Key.Equal(k) {
 			return p
@@ -92,11 +137,84 @@ func (ps *Peers) ByKey(k ed25519.PublicKey) *Peer {
 
 func (ps *Peers) ByName(name string) *Peer {
 	for _, p := range ps.Peers {
-		if p.Name == name {
+		if p.Name == name && !p.Removed {
 			return p
 		}
 	}
 	return nil
+}
+
+// Current lists the peers that haven't been removed.
+func (ps *Peers) Current() []*Peer {
+	var out []*Peer
+	for _, p := range ps.Peers {
+		if !p.Removed {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// Add records a newly paired peer, replacing a removed entry for the same
+// key.
+func (ps *Peers) Add(p *Peer) {
+	p.Touch()
+	if old := ps.entry(ed25519.PublicKey(p.Key)); old != nil {
+		*old = *p
+		return
+	}
+	ps.Peers = append(ps.Peers, p)
+}
+
+// Merge folds in the peer list from another of your machines: for each peer
+// the most recently changed entry wins, removals included. Names that clash
+// with a different peer get a suffix. It reports whether anything changed.
+func (ps *Peers) Merge(o *Peers) bool {
+	changed := false
+	if o.Self.NameUpdated.After(ps.Self.NameUpdated) && o.Self.Name != "" {
+		ps.Self.Name, ps.Self.NameUpdated = o.Self.Name, o.Self.NameUpdated
+		changed = true
+	}
+	for _, in := range o.Peers {
+		if len(in.Key) != ed25519.PublicKeySize || in.changed().IsZero() {
+			continue
+		}
+		cp := *in
+		cp.Updated = in.changed()
+		cp.Perms.Sessions = append([]string(nil), in.Perms.Sessions...)
+		if err := cp.Perms.Validate(); err != nil && !cp.Removed {
+			continue
+		}
+		mine := ps.entry(ed25519.PublicKey(cp.Key))
+		if mine != nil && !cp.Updated.After(mine.changed()) {
+			continue
+		}
+		if !cp.Removed {
+			if other := ps.ByName(cp.Name); other != nil && other != mine {
+				cp.Name = ps.UniqueName(cp.Name)
+			}
+		}
+		if mine != nil {
+			*mine = cp
+		} else {
+			ps.Peers = append(ps.Peers, &cp)
+		}
+		changed = true
+	}
+	return ps.prune() || changed
+}
+
+// prune drops removals old enough to have reached every machine.
+func (ps *Peers) prune() bool {
+	keep := ps.Peers[:0]
+	for _, p := range ps.Peers {
+		if !p.Removed || time.Since(p.changed()) < tombstoneTTL {
+			keep = append(keep, p)
+		}
+	}
+	pruned := len(keep) != len(ps.Peers)
+	ps.Peers = keep
+	return pruned
 }
 
 // UniqueName returns name, or name-2, name-3... if it's taken.
@@ -195,7 +313,7 @@ func (ps *Peers) SelfName() string {
 func (ps *Peers) Enabled() []*Peer {
 	var out []*Peer
 	for _, p := range ps.Peers {
-		if p.Enabled {
+		if p.Enabled && !p.Removed {
 			out = append(out, p)
 		}
 	}

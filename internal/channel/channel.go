@@ -96,12 +96,11 @@ func Run(ctx context.Context, version string) error {
 }
 
 func (c *Channel) initSession(ctx context.Context) {
-	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
 	c.info = proto.SessionInfo{
 		SID:     proto.NewID(8),
 		Name:    filepath.Base(cwd),
-		Host:    host,
+		Host:    c.cfg.MachineName(),
 		Account: accountLabel(),
 		Cwd:     cwd,
 		Status:  "unknown",

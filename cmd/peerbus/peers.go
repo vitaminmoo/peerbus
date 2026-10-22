@@ -47,9 +47,23 @@ func confirm(prompt string) bool {
 
 func runID(args []string) error {
 	fs := flag.NewFlagSet("id", flag.ExitOnError)
-	name := fs.String("name", "", "set the name you suggest others call you")
+	name := fs.String("name", "", "set the name you suggest others call you (all your machines)")
+	machine := fs.String("machine", "", "set what this machine's sessions are listed under")
 	if _, err := parse(fs, args); err != nil {
 		return err
+	}
+	cfg, err := config.LoadClient()
+	if err != nil {
+		return err
+	}
+	if *machine != "" {
+		if err := requireTerminal("naming this machine"); err != nil {
+			return err
+		}
+		cfg.Machine = identity.CleanName(*machine)
+		if err := config.UpdateClient(func(c *config.Client) { c.Machine = cfg.Machine }); err != nil {
+			return err
+		}
 	}
 	st := idStore()
 	key, err := st.Identity()
@@ -60,7 +74,11 @@ func runID(args []string) error {
 		if err := requireTerminal("changing your name"); err != nil {
 			return err
 		}
-		if err := st.Update(func(p *identity.Peers) error { p.Self.Name = identity.CleanName(*name); return nil }); err != nil {
+		err := st.Update(func(p *identity.Peers) error {
+			p.Self.Name, p.Self.NameUpdated = identity.CleanName(*name), time.Now().UTC()
+			return nil
+		})
+		if err != nil {
 			return err
 		}
 	}
@@ -68,18 +86,18 @@ func runID(args []string) error {
 	if err != nil {
 		return err
 	}
-	enabled := 0
-	for _, p := range ps.Peers {
-		if p.Enabled {
-			enabled++
-		}
-	}
+	current := ps.Current()
+	enabled := len(ps.Enabled())
 	shown := ps.Self.Name
 	if shown == "" {
 		shown = os.Getenv("USER") + " (default; set with -name)"
 	}
-	fmt.Printf("Identity:    %s\nName:        %s\nStore:       %s\nPeers:       %d (%d enabled)\n",
-		identity.Fingerprint(key.Public().(ed25519.PublicKey)), shown, st.Dir, len(ps.Peers), enabled)
+	machineShown := cfg.MachineName()
+	if cfg.Machine == "" {
+		machineShown += " (hostname; set with -machine)"
+	}
+	fmt.Printf("Identity:    %s\nName:        %s\nMachine:     %s\nStore:       %s\nPeers:       %d (%d enabled)\n",
+		identity.Fingerprint(key.Public().(ed25519.PublicKey)), shown, machineShown, st.Dir, len(current), enabled)
 	return nil
 }
 
@@ -184,13 +202,13 @@ func runPeer(args []string) error {
 		if err != nil {
 			return err
 		}
-		if len(ps.Peers) == 0 {
+		if len(ps.Current()) == 0 {
 			fmt.Println("No peers yet. Pair with: peerbus invite")
 			return nil
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tFINGERPRINT\tENABLED\tDELIVER\tSEND\tSESSIONS\tDETAILS\tRESOURCES\tPAIRED")
-		for _, p := range ps.Peers {
+		for _, p := range ps.Current() {
 			fmt.Fprintf(w, "%s\t%s\t%v\t%s\t%s\t%s\t%v\t%v\t%s\n", p.Name, identity.Fingerprint(ed25519.PublicKey(p.Key)), p.Enabled,
 				p.Perms.Deliver, p.Perms.Send, strings.Join(p.Perms.Sessions, ","), p.Perms.ShowDetails, p.Perms.ShowResources, p.PairedAt.Local().Format("2006-01-02"))
 		}
@@ -206,7 +224,7 @@ func runPeer(args []string) error {
 		return err
 	}
 	name := args[1]
-	if args[0] == "rm" && !confirm(fmt.Sprintf("Forget %q? You'd have to pair again to talk to them.", name)) {
+	if args[0] == "rm" && !confirm(fmt.Sprintf("Forget %q on all your machines? You'd have to pair again to talk to them.", name)) {
 		return errors.New("not removed")
 	}
 	return st.Update(func(ps *identity.Peers) error {
@@ -216,13 +234,9 @@ func runPeer(args []string) error {
 		}
 		switch args[0] {
 		case "rm":
-			for i, q := range ps.Peers {
-				if q == p {
-					ps.Peers = append(ps.Peers[:i], ps.Peers[i+1:]...)
-					break
-				}
-			}
+			p.Remove()
 			fmt.Println("Removed", name)
+			return nil
 		case "enable", "disable":
 			p.Enabled = args[0] == "enable"
 			fmt.Printf("%s %sd\n", name, args[0])
@@ -272,6 +286,7 @@ func runPeer(args []string) error {
 			fmt.Printf("%s: deliver=%s send=%s sessions=%s details=%v resources=%v\n", name, perms.Deliver, perms.Send,
 				strings.Join(perms.Sessions, ","), perms.ShowDetails, perms.ShowResources)
 		}
+		p.Touch()
 		return nil
 	})
 }

@@ -238,7 +238,7 @@ func Host(ctx context.Context, store identity.Store, inv Invite, name string, op
 					n = h.Name
 				}
 				res.Name = p.UniqueName(n)
-				p.Peers = append(p.Peers, &identity.Peer{
+				p.Add(&identity.Peer{
 					Name: res.Name, Key: identity.Key(c.PeerKey), Secret: pairSecret,
 					Enabled: true, Perms: identity.DefaultPerms(), PairedAt: time.Now().UTC(),
 				})
@@ -316,7 +316,7 @@ func Redeem(ctx context.Context, store identity.Store, code, name string, force 
 	}
 	var key ed25519.PrivateKey
 	if inv.Self {
-		if store.HasIdentity() && len(ps.Peers) > 0 && !force {
+		if store.HasIdentity() && len(ps.Current()) > 0 && !force {
 			return Result{}, errors.New("this machine already has an identity with peers; pairing it as one of your devices would replace them (use -force)")
 		}
 		_, key, _ = ed25519.GenerateKey(nil) // throwaway; we adopt the received identity
@@ -422,7 +422,7 @@ func Redeem(ctx context.Context, store identity.Store, code, name string, force 
 				n = rep.Name
 			}
 			res.Name = p.UniqueName(n)
-			p.Peers = append(p.Peers, &identity.Peer{
+			p.Add(&identity.Peer{
 				Name: res.Name, Key: identity.Key(inv.Key), Secret: rep.Secret,
 				Enabled: true, Perms: identity.DefaultPerms(), PairedAt: time.Now().UTC(),
 			})

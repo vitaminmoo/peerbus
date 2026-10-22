@@ -93,6 +93,10 @@ const (
 	TNotice        = "notice"
 	TResult        = "result"
 
+	// Between your own sessions on different machines: the sender's whole
+	// peers.json in Data, for the receiver to merge.
+	TPeers = "peers"
+
 	// From the CLI to a session on this machine only.
 	TList    = "list"
 	TApprove = "approve"

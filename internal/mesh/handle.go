@@ -69,6 +69,8 @@ func (m *Mesh) handle(l *Link, f proto.Frame) {
 		l.reply(f.Req, res, err)
 	case proto.TNotice:
 		m.onNotice(l, f)
+	case proto.TPeers:
+		m.mergePeers(l, f)
 	default:
 		l.reply(f.Req, nil, fmt.Errorf("unknown frame %q", f.Type))
 	}
@@ -94,7 +96,7 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	m.mu.Lock()
 	me := m.info
 	m.mu.Unlock()
-	if peer != nil && !peer.Perms.MaySee(me.Name) {
+	if peer != nil && !peer.Perms.MaySee(me.Host, me.Name) {
 		return proto.SendResult{}, errors.New("no such session")
 	}
 	thread := proto.CleanThread(f.Thread)

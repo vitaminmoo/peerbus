@@ -161,14 +161,13 @@ func control(ctx context.Context, server string, wait time.Duration) (*mesh.Mesh
 	if err != nil {
 		return nil, err
 	}
-	host, _ := os.Hostname()
 	m, err := mesh.Start(ctx, mesh.Config{
 		Store:    idStore(),
 		StateDir: config.StateDir(),
 		Server:   server,
 		STUN:     cfg.STUN,
 		Kind:     proto.KindControl,
-		Info:     proto.SessionInfo{SID: proto.NewID(8), Name: "cli", Host: host},
+		Info:     proto.SessionInfo{SID: proto.NewID(8), Name: "cli", Host: cfg.MachineName()},
 		Log:      debugLog(),
 	})
 	if err != nil {

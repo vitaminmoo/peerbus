@@ -8,7 +8,8 @@
 //
 // Policy is enforced by the receiving side from its own peers.json: who may
 // connect, which sessions a peer may see, and whether their messages are
-// delivered or held for the human.
+// delivered or held for the human. Your own sessions on different machines
+// send each other their peers.json, so every machine enforces the same list.
 package mesh
 
 import (
@@ -16,6 +17,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -74,6 +76,8 @@ type Mesh struct {
 	cancel    context.CancelFunc
 	ready     chan struct{}
 	readyOnce sync.Once
+
+	reloadMu sync.Mutex // one reloadPeers at a time: the loop and merges both call it
 
 	mu       sync.Mutex
 	info     proto.SessionInfo
@@ -222,6 +226,8 @@ func (m *Mesh) loop() {
 // looked for, disabled ones are cut off, and permission changes reach the
 // other side through a fresh hello.
 func (m *Mesh) reloadPeers() {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
 	mod := m.cfg.Store.ModTime()
 	if mod.Equal(m.peersMod) {
 		return
@@ -250,6 +256,59 @@ func (m *Mesh) reloadPeers() {
 	}
 	m.setPoints()
 	m.Update(m.Info())
+	for _, l := range links {
+		if m.syncsWith(l) {
+			m.sendPeers(l)
+		}
+	}
+}
+
+// syncsWith reports whether l is another of our own sessions, which may
+// keep its own copy of peers.json. One that shares ours (the same machine
+// and OS user) merges to no change.
+func (m *Mesh) syncsWith(l *Link) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return m.cfg.Kind == proto.KindSession && l.peer == nil && l.kind == proto.KindSession
+}
+
+func (m *Mesh) sendPeers(l *Link) {
+	m.mu.Lock()
+	ps := m.peers
+	m.mu.Unlock()
+	l.write(proto.Frame{Type: proto.TPeers, Data: ps})
+}
+
+var errUnchanged = errors.New("unchanged")
+
+// mergePeers folds in the peer list from one of our sessions on another
+// machine and applies the result here.
+func (m *Mesh) mergePeers(l *Link, f proto.Frame) {
+	if !m.syncsWith(l) {
+		return
+	}
+	b, err := json.Marshal(f.Data)
+	if err != nil {
+		return
+	}
+	var in identity.Peers
+	if err := json.Unmarshal(b, &in); err != nil {
+		m.log.Printf("peers from %s: %v", m.describe(l), err)
+		return
+	}
+	err = m.cfg.Store.Update(func(ps *identity.Peers) error {
+		if !ps.Merge(&in) {
+			return errUnchanged
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		m.log.Printf("merged peers from %s", m.describe(l))
+		m.reloadPeers()
+	case !errors.Is(err, errUnchanged):
+		m.log.Printf("merging peers from %s: %v", m.describe(l), err)
+	}
 }
 
 // discover looks under every meeting point we share with someone and dials
@@ -417,6 +476,9 @@ func (m *Mesh) register(l *Link) {
 	m.mu.Unlock()
 	m.log.Printf("%s %s via %s", m.describe(l), map[bool]string{true: "connected", false: "accepted"}[!l.conn.Inbound], l.conn.Path)
 	go l.readLoop()
+	if m.syncsWith(l) {
+		m.sendPeers(l)
+	}
 }
 
 func (m *Mesh) dialerOf(l *Link) []byte {
@@ -492,7 +554,7 @@ func (m *Mesh) helloFor(peer *identity.Peer) proto.Frame {
 	h := m.node.Handle()
 	f := proto.Frame{Type: proto.THello, V: proto.Version, Kind: m.cfg.Kind, Handle: hex.EncodeToString(h[:])}
 	if peer != nil && m.cfg.Kind == proto.KindSession {
-		if !peer.Perms.MaySee(info.Name) {
+		if !peer.Perms.MaySee(info.Host, info.Name) {
 			f.Kind = proto.KindHidden
 			info = proto.SessionInfo{SID: info.SID, Name: info.Name}
 		} else {

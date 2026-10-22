@@ -58,7 +58,7 @@ func pair(t *testing.T, a, b identity.Store) {
 	secret := identity.NewSecret()
 	add := func(s identity.Store, other identity.Store, name string) {
 		err := s.Update(func(p *identity.Peers) error {
-			p.Peers = append(p.Peers, &identity.Peer{Name: name, Key: identity.Key(pub(t, other)), Secret: secret, Enabled: true, Perms: identity.DefaultPerms(), PairedAt: time.Now()})
+			p.Add(&identity.Peer{Name: name, Key: identity.Key(pub(t, other)), Secret: secret, Enabled: true, Perms: identity.DefaultPerms(), PairedAt: time.Now()})
 			return nil
 		})
 		if err != nil {
@@ -410,4 +410,67 @@ func (m *Mesh) resolveLink(t *testing.T, to string) *Link {
 		t.Fatalf("resolve %s: %v", to, err)
 	}
 	return tgt.link
+}
+
+// otherMachine gives s's identity and peers to a new store, as
+// `peerbus invite -self` and `peerbus pair` would.
+func otherMachine(t *testing.T, s identity.Store) identity.Store {
+	t.Helper()
+	key, err := s.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := identity.Store{Dir: t.TempDir()}
+	if err := o.ReplaceIdentity(key); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Update(func(p *identity.Peers) error { *p = *ps; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestPeersSyncAcrossOwnMachines(t *testing.T) {
+	srv := server(t)
+	alice := store(t, "alice")
+	laptop := otherMachine(t, alice) // joined before alice paired with anyone
+	bob := store(t, "bob")
+
+	a1, _ := start(t, alice, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "a1a1a1a1", Name: "one", Host: "desk", Status: "idle"})
+	l1, _ := start(t, laptop, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "l1l1l1l1", Name: "notes", Host: "laptop", Status: "idle"})
+	waitFor(t, "alice's machines to meet", func() bool { return sees(a1, "alice/notes#l1l1l1") && sees(l1, "alice/one#a1a1a1") })
+
+	// Pairing with bob on the desk reaches the laptop too.
+	pair(t, alice, bob)
+	b1, _ := start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
+	waitFor(t, "the laptop to learn about bob", func() bool {
+		ps, _ := laptop.Load()
+		return ps.ByName("bob") != nil
+	})
+	waitFor(t, "bob and the laptop to meet", func() bool { return sees(l1, "bob/bobsess#b1b1b1") && sees(b1, "alice/notes#l1l1l1") })
+
+	// Limiting bob to the desk by machine name, on the laptop, applies on
+	// the desk too.
+	if err := laptop.Update(func(p *identity.Peers) error {
+		b := p.ByName("bob")
+		b.Perms.Sessions = []string{"desk/*"}
+		b.Touch()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "bob to lose the laptop", func() bool { return !sees(b1, "alice/notes#l1l1l1") && sees(b1, "alice/one#a1a1a1") })
+
+	// Removing bob anywhere removes him everywhere.
+	if err := laptop.Update(func(p *identity.Peers) error { p.ByName("bob").Remove(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the desk to drop bob", func() bool {
+		ps, _ := alice.Load()
+		return ps.ByName("bob") == nil && !sees(a1, "bob/bobsess#b1b1b1")
+	})
 }
