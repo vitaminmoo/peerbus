@@ -22,6 +22,7 @@ import (
 
 	"github.com/vitaminmoo/peerbus/internal/channel"
 	"github.com/vitaminmoo/peerbus/internal/config"
+	"github.com/vitaminmoo/peerbus/internal/fcm"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/mesh"
 	"github.com/vitaminmoo/peerbus/internal/proto"
@@ -37,6 +38,7 @@ Identity and pairing:
   peerbus id [-name NAME] [-machine NAME]         show or set your name and this machine's
   peerbus invite [-self] [-name NAME] [-ttl 15m]  print an invite code and wait for it to be redeemed
   peerbus pair [-name NAME] CODE                  redeem an invite code
+  peerbus phone [-ttl 15m]                        pair the Android app: show a QR code for it to scan
   peerbus peer list | rm | enable | disable | rename | set NAME k=v...
 
 Using:
@@ -45,13 +47,16 @@ Using:
   peerbus tui                                     every held message on all your machines: approve, route, decline
                                                   and the history of every message, yours and friends'
   peerbus inbox [-watch]                          this machine's messages waiting for your approval
+  peerbus fake [-from NAME] [-to SESSION|you] [TEXT...]
+                                                  hold a made-up message to try approving it (delivers nothing)
   peerbus approve [-to SESSION] ID                deliver a held message (interactive only)
   peerbus deny ID
 
 Running:
   peerbus channel                                 the MCP channel server Claude Code spawns
   peerbus mcp-config                              print the MCP server entry for Claude Code
-  peerbus rendezvous [-listen HOST:PORT]          run a rendezvous/relay server (UDP)
+  peerbus rendezvous [-listen HOST:PORT] [-fcm-credentials FILE]
+                                                  run a rendezvous/relay server (UDP), optionally relaying pushes to phones
 `
 
 func main() {
@@ -74,6 +79,8 @@ func main() {
 		err = runInvite(ctx, args)
 	case "pair":
 		err = runPair(ctx, args)
+	case "phone":
+		err = runPhone(ctx, args)
 	case "peer":
 		err = runPeer(args)
 	case "mcp-config":
@@ -86,6 +93,8 @@ func main() {
 		err = runTUI(ctx, args)
 	case "inbox":
 		err = runInbox(ctx, args)
+	case "fake":
+		err = runFake(ctx, args)
 	case "approve":
 		err = runApprove(ctx, args)
 	case "deny":
@@ -122,6 +131,7 @@ func parse(fs *flag.FlagSet, args []string) ([]string, error) {
 func runRendezvous(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("rendezvous", flag.ExitOnError)
 	listen := fs.String("listen", fmt.Sprintf("0.0.0.0:%d", config.DefaultPort), "UDP listen address")
+	creds := fs.String("fcm-credentials", "", "Firebase service account key (JSON) for relaying push notifications to the Android app")
 	if _, err := parse(fs, args); err != nil {
 		return err
 	}
@@ -135,6 +145,14 @@ func runRendezvous(ctx context.Context, args []string) error {
 	}
 	srv := transport.NewServer(conn)
 	srv.Log = log.New(os.Stderr, "", 0)
+	if *creds != "" {
+		c, err := fcm.Load(*creds)
+		if err != nil {
+			return err
+		}
+		srv.Push = c
+		srv.Log.Printf("relaying push notifications through Firebase")
+	}
 	srv.Log.Printf("peerbus %s rendezvous on udp %s", version, conn.LocalAddr())
 	return srv.Serve(ctx)
 }
@@ -162,6 +180,11 @@ func debugLog() *log.Logger {
 // finds sessions on this machine. It returns after the first round of
 // discovery, or after wait.
 func control(ctx context.Context, server string, wait time.Duration) (*mesh.Mesh, error) {
+	return controlAs(ctx, "cli", server, wait)
+}
+
+// controlAs is control with the name messages sent from it carry.
+func controlAs(ctx context.Context, name, server string, wait time.Duration) (*mesh.Mesh, error) {
 	cfg, err := config.LoadClient()
 	if err != nil {
 		return nil, err
@@ -172,7 +195,7 @@ func control(ctx context.Context, server string, wait time.Duration) (*mesh.Mesh
 		Server:   server,
 		STUN:     cfg.STUN,
 		Kind:     proto.KindControl,
-		Info:     proto.SessionInfo{SID: proto.NewID(8), Name: "cli", Host: cfg.MachineName()},
+		Info:     proto.SessionInfo{SID: proto.NewID(8), Name: name, Host: cfg.MachineName()},
 		Log:      debugLog(),
 	})
 	if err != nil {
@@ -214,6 +237,10 @@ func runPeers(ctx context.Context, args []string) error {
 		return nil
 	}
 	fmt.Print(channel.FormatPeers(peers, "", *filter))
+	if ps, err := idStore().Load(); err == nil && ps.Self.Pushable() != nil {
+		p := ps.Self.Phone
+		fmt.Printf("\nYour phone: %s, notified of held messages (registered %s)\n", p.Name, p.Updated.Local().Format("Jan 02 15:04"))
+	}
 	return nil
 }
 
@@ -276,7 +303,8 @@ func runTUI(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	m, err := control(ctx, cfg.Server(), 5*time.Second)
+	// The TUI is you: it sends as user/human, where replies come back.
+	m, err := controlAs(ctx, proto.Human, cfg.Server(), 5*time.Second)
 	if err != nil {
 		return err
 	}
@@ -464,5 +492,60 @@ func runDeny(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Println("Declined", h.ID)
+	return nil
+}
+
+// runFake has a session on this machine hold a made-up message, to try
+// approving, routing and declining in the TUI or the app, and their
+// notifications. Approving it delivers nothing.
+func runFake(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("fake", flag.ExitOnError)
+	from := fs.String("from", "test", "who it pretends to be from")
+	to := fs.String("to", "", `the session on this machine it's for, or "you" for you as a person (default: the only session)`)
+	pos, err := parse(fs, args)
+	if err != nil {
+		return err
+	}
+	text := strings.Join(pos, " ")
+	if text == "" {
+		text = "Can I borrow your session for a minute? (A test message from peerbus fake: approving it delivers nothing.)"
+	}
+	m, err := control(ctx, "", 3*time.Second)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	locals := m.Locals()
+	var names []string
+	for _, l := range locals {
+		names = append(names, l.Info().Name)
+	}
+	var via *mesh.Link
+	switch {
+	case len(locals) == 0:
+		return errors.New("no peerbus session is running on this machine to hold it")
+	case *to == "you" || *to == "" && len(locals) == 1:
+		via = locals[0]
+	case *to == "":
+		return fmt.Errorf("pick a session with -to (or -to you): %s", strings.Join(names, ", "))
+	default:
+		for _, l := range locals {
+			if l.Info().Name == *to || l.Address() == *to {
+				via = l
+			}
+		}
+		if via == nil {
+			return fmt.Errorf("no session %q on this machine; running: %s", *to, strings.Join(names, ", "))
+		}
+	}
+	f := proto.Frame{Type: proto.TFakeHeld, Text: text, Meta: map[string]string{"from": *from}}
+	if *to == "you" {
+		f.To = "you"
+	}
+	var res proto.SendResult
+	if err := via.Request(ctx, f, &res); err != nil {
+		return err
+	}
+	fmt.Printf("Held a test message from %s to %s. Approve, route or decline it in peerbus tui or the app.\n", *from, res.To)
 	return nil
 }

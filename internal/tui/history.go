@@ -1,16 +1,12 @@
 package tui
 
 import (
-	"context"
-	"errors"
-	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/vitaminmoo/peerbus/internal/history"
-	"github.com/vitaminmoo/peerbus/internal/mesh"
+	"github.com/vitaminmoo/peerbus/internal/held"
 	"github.com/vitaminmoo/peerbus/internal/proto"
 )
 
@@ -30,22 +26,15 @@ var filterTitles = [...]string{"all messages", "between your sessions", "with fr
 func (f filter) keeps(r record) bool {
 	switch f {
 	case ownMessages:
-		return r.e.Peer == ""
+		return r.Entry.Peer == ""
 	case friendMessages:
-		return r.e.Peer != ""
+		return r.Entry.Peer != ""
 	}
 	return true
 }
 
 // record is one message, merged from every machine that logged it.
-type record struct {
-	e        proto.HistoryEntry
-	machines []string
-	local    bool         // in this machine's history, read directly
-	via      []*mesh.Link // sessions on the other machines that logged it
-}
-
-func (r record) key() string { return history.Key(r.e) }
+type record = held.Record
 
 type (
 	histTickMsg struct{}
@@ -74,51 +63,15 @@ func (m *model) turnPage() tea.Cmd {
 	return m.fetchHistory()
 }
 
-// fetchHistory reads this machine's history and asks every session of ours
-// for theirs, then merges the machines' records of each message.
+// fetchHistory gathers every machine's history.
 func (m *model) fetchHistory() tea.Cmd {
-	return func() tea.Msg {
-		views, byInbox := askAll(m.ctx, m.mesh.Own(), proto.Frame{Type: proto.THistory}, func(v proto.HistoryView) string { return v.InboxID })
-		localID := ""
-		if v, err := m.mesh.History(); err == nil {
-			views[v.InboxID], localID = v, v.InboxID
-		}
-		ids := make([]string, 0, len(views))
-		for id := range views {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		var recs []record
-		at := map[string]int{}
-		for _, id := range ids {
-			v := views[id]
-			for _, e := range v.Messages {
-				k := history.Key(e)
-				i, ok := at[k]
-				if ok {
-					history.Merge(&recs[i].e, e)
-				} else {
-					i, at[k] = len(recs), len(recs)
-					recs = append(recs, record{e: e})
-				}
-				r := &recs[i]
-				r.machines = append(r.machines, v.Machine)
-				if id == localID {
-					r.local = true
-				} else {
-					r.via = append(r.via, byInbox[id]...)
-				}
-			}
-		}
-		sort.SliceStable(recs, func(i, j int) bool { return recs[i].e.At > recs[j].e.At })
-		return historyMsg{records: recs}
-	}
+	return func() tea.Msg { return historyMsg{records: held.History(m.ctx, m.mesh)} }
 }
 
 func (m *model) applyHistory(h historyMsg) {
 	keep := ""
 	if r, ok := m.currentRecord(); ok {
-		keep = r.key()
+		keep = r.Key()
 	}
 	m.hist, m.histLoaded = h.records, true
 	m.placeHistoryCursor(keep)
@@ -148,7 +101,7 @@ func (m *model) currentRecord() (record, bool) {
 func (m *model) placeHistoryCursor(key string) {
 	s := m.shown()
 	for i, r := range s {
-		if r.key() == key {
+		if r.Key() == key {
 			m.hcursor = i
 			return
 		}
@@ -169,10 +122,16 @@ func (m *model) historyKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.hcursor = 0
 	case "end", "G":
 		m.hcursor = max(0, n-1)
+	case "n":
+		m.startCompose("", "")
+	case "r":
+		if r, ok := m.currentRecord(); ok {
+			m.startCompose(m.replyTo(r.Entry), r.Entry.Thread)
+		}
 	case "f":
 		keep := ""
 		if r, ok := m.currentRecord(); ok {
-			keep = r.key()
+			keep = r.Key()
 		}
 		m.filter = (m.filter + 1) % filter(len(filterTitles))
 		m.placeHistoryCursor(keep)
@@ -184,25 +143,13 @@ func (m *model) historyKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // history only had its start.
 func (m *model) wantFull() tea.Cmd {
 	r, ok := m.currentRecord()
-	if !ok || !r.e.Cut || m.asked[r.key()] {
+	if !ok || !r.Entry.Cut || m.asked[r.Key()] {
 		return nil
 	}
-	m.asked[r.key()] = true
+	m.asked[r.Key()] = true
 	return func() tea.Msg {
-		var e proto.HistoryEntry
-		err := errors.New("none of the machines that logged it has a session online")
-		if r.local {
-			e, err = m.mesh.HistoryMessage(r.e.From, r.e.ID)
-		}
-		for _, l := range r.via {
-			if err == nil {
-				break
-			}
-			ctx, cancel := context.WithTimeout(m.ctx, askTimeout)
-			err = l.Request(ctx, proto.Frame{Type: proto.THistory, ID: r.e.ID, Meta: map[string]string{"from": r.e.From}}, &e)
-			cancel()
-		}
-		return fullMsg{key: r.key(), text: e.Text, err: err}
+		e, err := r.Full(m.ctx, m.mesh)
+		return fullMsg{key: r.Key(), text: e.Text, err: err}
 	}
 }
 
@@ -213,7 +160,7 @@ func (m *model) outbound(e proto.HistoryEntry) bool {
 
 // shortAddr drops the ref, and our own name, from an address for the list.
 func (m *model) shortAddr(a string) string {
-	if a == m.self+"/" {
+	if a == m.self+"/" || a == m.self+"/"+proto.Human {
 		return "you"
 	}
 	a, _, _ = strings.Cut(a, "#")

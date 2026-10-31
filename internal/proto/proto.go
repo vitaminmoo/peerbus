@@ -120,7 +120,25 @@ const (
 	// sessions sent and received, newest first, long ones cut short. With ID
 	// (and Meta["from"]), that one message in full.
 	THistory = "history"
+
+	// From your own phone to a session: push held messages to
+	// Meta["token"] for the phone Meta["device"] named Meta["name"]. The
+	// session records it in peers.json, which carries it to your other
+	// machines. An empty token stops pushes.
+	TPushRegister = "push_register"
+
+	// From your own CLI on this machine to a session: hold a made-up
+	// message (Text, from the person Meta["from"]) for this session, or with
+	// To "you" for you as a person, to try approving it. Approving it
+	// delivers nothing.
+	TFakeHeld = "fake_held"
 )
+
+// Human is the session name that stands for a person rather than an
+// agent: user/human reaches them in `peerbus tui` and on their phone, and
+// their TUI and phone send from it. Messages to it never enter an agent's
+// context, so they aren't held for approval.
+const Human = "human"
 
 // Hello kinds.
 const (
@@ -185,6 +203,8 @@ type HeldView struct {
 	Outbound bool   `json:"outbound"`         // yours, waiting for your own go-ahead
 	HeldAt   int64  `json:"heldAt"`
 	Text     string `json:"text"`
+	Fake     bool   `json:"fake,omitempty"` // made by `peerbus fake`; approving delivers nothing
+	Note     bool   `json:"note,omitempty"` // to the person (user/human), to read, not approve
 }
 
 // InboxView is one machine's held messages, as a session there reports
@@ -193,7 +213,14 @@ type InboxView struct {
 	Machine string     `json:"machine"` // its name
 	InboxID string     `json:"inboxId"` // the same from every session sharing this inbox
 	Held    []HeldView `json:"held"`
+	V       int        `json:"v,omitempty"` // ViewVersion
 }
+
+// ViewVersion is how a session reads the inbox and history its machine
+// shares, sent with its views of them. When sessions of different peerbus
+// versions share a machine, clients believe and act through the newest:
+// an older one misreads what it doesn't know (0 predates notes and fakes).
+const ViewVersion = 1
 
 // HistoryEntry is a message one of your sessions sent or received, or a
 // later change in what happened to it (Status, and To once a message held
@@ -208,7 +235,8 @@ type HistoryEntry struct {
 	Status string `json:"status"`         // delivered, held, ask (waiting on send=ask), declined, unsent (ask declined)
 	At     int64  `json:"at"`
 	Text   string `json:"text,omitempty"`
-	Cut    bool   `json:"cut,omitempty"` // Text is only the start of the message
+	Cut    bool   `json:"cut,omitempty"`  // Text is only the start of the message
+	Fake   bool   `json:"fake,omitempty"` // made by `peerbus fake`; never reached a session
 }
 
 // HistoryView is one machine's message history, as a session there reports
@@ -217,4 +245,5 @@ type HistoryView struct {
 	Machine  string         `json:"machine"`
 	InboxID  string         `json:"inboxId"` // the same from every session sharing this history
 	Messages []HistoryEntry `json:"messages"`
+	V        int            `json:"v,omitempty"` // ViewVersion
 }

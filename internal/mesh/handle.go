@@ -17,6 +17,7 @@ import (
 	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/proto"
+	"github.com/vitaminmoo/peerbus/internal/push"
 	"github.com/vitaminmoo/peerbus/internal/transport"
 )
 
@@ -95,6 +96,19 @@ func (m *Mesh) handle(l *Link, f proto.Frame) {
 		}
 		res, err := m.deny(f.ID)
 		l.reply(f.Req, res, err)
+	case proto.TPushRegister:
+		if !l.isOwnControl() || m.cfg.Kind != proto.KindSession {
+			l.reply(f.Req, nil, errors.New("not allowed"))
+			return
+		}
+		l.reply(f.Req, nil, m.registerPhone(f.Meta["name"], f.Meta["device"], f.Meta["token"]))
+	case proto.TFakeHeld:
+		if !l.isLocalControl() || m.cfg.Kind != proto.KindSession {
+			l.reply(f.Req, nil, errors.New("not allowed"))
+			return
+		}
+		res, err := m.fakeHeld(f.Meta["from"], f.Text, f.To == "you")
+		l.reply(f.Req, res, err)
 	case proto.TNotice:
 		m.onNotice(l, f)
 	case proto.TPeers:
@@ -127,6 +141,7 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	if peer != nil && !peer.Perms.MaySee(me.Host, me.Name) {
 		return proto.SendResult{}, errors.New("no such session")
 	}
+	toHuman := strings.HasSuffix(f.To, "/"+proto.Human)
 	thread := proto.CleanThread(f.Thread)
 	if thread == "" {
 		thread = proto.NewID(6)
@@ -146,6 +161,12 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	}
 	if kind != proto.KindControl {
 		msg.FromSID = info.SID
+	}
+	if toHuman {
+		// For the person, to read: it never reaches this session's agent,
+		// so it needn't wait for approval.
+		msg.To = m.selfName() + "/" + proto.Human
+		return m.noteForHuman(msg, peer, l.key)
 	}
 	res := proto.SendResult{ID: msg.ID, Thread: thread, To: msg.To}
 	rec := proto.HistoryEntry{ID: msg.ID, Thread: thread, From: msg.From, To: msg.To, Text: msg.Text, At: msg.SentAt}
@@ -169,6 +190,7 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	}
 	rec.Status = "held"
 	m.record(rec)
+	m.pushNote(m.heldNote(h))
 	m.notice("held",
 		fmt.Sprintf("A message from %s (another person) is waiting for your user's approval in `peerbus tui`. Tell them briefly; don't approve or deny it yourself.", msg.From),
 		map[string]string{"held_id": h.ID, "from": msg.From})
@@ -225,6 +247,14 @@ func (m *Mesh) send(ctx context.Context, to, text, thread, id string, human bool
 	if err != nil {
 		return proto.SendResult{}, err
 	}
+	if tgt.human && tgt.peer == nil && m.cfg.Kind == proto.KindSession {
+		// Our own person: this machine's inbox will do.
+		msg := proto.Message{
+			ID: orNewID(id), Thread: orNewThread(thread), From: m.SelfAddress(), FromUser: m.selfName(),
+			FromSID: m.Info().SID, To: m.selfName() + "/" + proto.Human, Text: text, SentAt: time.Now().Unix(),
+		}
+		return m.noteForHuman(msg, nil, m.pub)
+	}
 	routed := tgt.link == nil
 	if routed {
 		tgt.link = m.anySessionOf(tgt.peer)
@@ -247,7 +277,10 @@ func (m *Mesh) send(ctx context.Context, to, text, thread, id string, human bool
 	}
 	addr := m.addr(tgt.link)
 	wire := tgt.link.Address()
-	if routed {
+	switch {
+	case tgt.human:
+		addr, wire = tgt.user+"/"+proto.Human, tgt.user+"/"+proto.Human
+	case routed:
 		addr, wire = tgt.user+"/", tgt.user+"/"
 	}
 	rec := proto.HistoryEntry{ID: id, Thread: thread, From: m.selfFrom(), To: addr, Text: text}
@@ -264,6 +297,7 @@ func (m *Mesh) send(ctx context.Context, to, text, thread, id string, human bool
 			if err := m.inbox.Add(h); err != nil {
 				return proto.SendResult{}, err
 			}
+			m.pushNote(m.heldNote(h))
 			rec.Status = "ask"
 			m.record(rec)
 			return proto.SendResult{Status: "ask", ID: h.ID, Thread: thread, To: addr}, nil
@@ -284,7 +318,10 @@ func (m *Mesh) send(ctx context.Context, to, text, thread, id string, human bool
 // selfFrom is this session's address as a session we send to records it.
 func (m *Mesh) selfFrom() string {
 	if m.cfg.Kind == proto.KindControl {
-		return m.selfName() + "/cli"
+		m.mu.Lock()
+		name := m.info.Name
+		m.mu.Unlock()
+		return m.selfName() + "/" + name // cli, tui or phone
 	}
 	return m.SelfAddress()
 }
@@ -306,7 +343,7 @@ func (m *Mesh) History() (proto.HistoryView, error) {
 		return proto.HistoryView{}, err
 	}
 	m.mu.Lock()
-	v := proto.HistoryView{Machine: m.info.Host, InboxID: m.inboxID(), Messages: []proto.HistoryEntry{}}
+	v := proto.HistoryView{Machine: m.info.Host, InboxID: m.inboxID(), Messages: []proto.HistoryEntry{}, V: proto.ViewVersion}
 	m.mu.Unlock()
 	size := 0
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -356,7 +393,7 @@ func (m *Mesh) inboxView() (proto.InboxView, error) {
 		return proto.InboxView{}, err
 	}
 	m.mu.Lock()
-	v := proto.InboxView{Machine: m.info.Host, InboxID: m.inboxID(), Held: []proto.HeldView{}}
+	v := proto.InboxView{Machine: m.info.Host, InboxID: m.inboxID(), Held: []proto.HeldView{}, V: proto.ViewVersion}
 	m.mu.Unlock()
 	for _, h := range st.Held {
 		v.Held = append(v.Held, h.View())
@@ -399,6 +436,26 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 	m.mu.Lock()
 	mySID := m.info.SID
 	m.mu.Unlock()
+	if h.Note {
+		return proto.SendResult{}, errors.New("that message is for you to read; reply to it or dismiss it")
+	}
+	if h.Fake {
+		// Nothing to deliver: say where it would have gone.
+		addr := m.SelfAddress()
+		if to != "" && to != mySID {
+			l := m.ownSession(to)
+			if l == nil {
+				return proto.SendResult{}, errors.New("that session isn't online")
+			}
+			addr = l.Address()
+		}
+		if _, err := m.inbox.Take(id); err != nil {
+			return proto.SendResult{}, err
+		}
+		m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, To: addr, Status: "delivered", Fake: true})
+		m.pushNote(push.Note{Kind: push.Gone, ID: id})
+		return proto.SendResult{Status: "delivered", ID: h.Msg.ID, Thread: h.Msg.Thread, To: addr}, nil
+	}
 	if h.Outbound {
 		if h.Target != mySID {
 			return proto.SendResult{}, errors.New("that message was written by another session; approve it there")
@@ -408,6 +465,7 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 			return proto.SendResult{}, err
 		}
 		m.inbox.Take(id)
+		m.pushNote(push.Note{Kind: push.Gone, ID: id})
 		return res, nil
 	}
 	if m.cfg.OnMessage == nil {
@@ -422,6 +480,11 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 			return proto.SendResult{}, err
 		}
 		res = m.deliverHere(h)
+		if h.Target != mySID {
+			// Routed here from where it was held for: a change names where
+			// it ended up, as when it's handed to another session.
+			m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, To: res.To, Status: "delivered"})
+		}
 	} else {
 		l := m.ownSession(to)
 		if l == nil {
@@ -435,6 +498,7 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 		}
 		m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, To: res.To, Status: "delivered"})
 	}
+	m.pushNote(push.Note{Kind: push.Gone, ID: id})
 	msg := h.Msg
 	if l := m.linkBySID(h.Peer, msg.FromSID); l != nil {
 		l.write(proto.Frame{Type: proto.TNotice, Kind: "status", Meta: map[string]string{"status": "approved", "msg_id": msg.ID, "thread": msg.Thread}})
@@ -486,11 +550,17 @@ func (m *Mesh) deny(id string) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if h.Note {
+		// Read and dismissed; the sender already knows it arrived.
+		m.pushNote(push.Note{Kind: push.Gone, ID: h.ID})
+		return map[string]string{"status": "dismissed", "id": h.ID}, nil
+	}
 	status := "declined"
 	if h.Outbound {
 		status = "unsent" // ours, and we said no
 	}
 	m.record(proto.HistoryEntry{ID: h.Msg.ID, From: h.Msg.From, Status: status})
+	m.pushNote(push.Note{Kind: push.Gone, ID: h.ID})
 	if !h.Outbound {
 		if l := m.linkBySID(h.Peer, h.Msg.FromSID); l != nil {
 			l.write(proto.Frame{Type: proto.TNotice, Kind: "status", Meta: map[string]string{"status": "declined", "msg_id": h.Msg.ID, "thread": h.Msg.Thread}})
@@ -542,9 +612,10 @@ func sameUser(l *Link, peer *identity.Peer) bool {
 var refRe = regexp.MustCompile(`^(.*?)\s*(?:#|\[)([0-9a-fA-F]{3,32})\]?$`)
 
 type target struct {
-	link *Link          // set when a session was named
-	peer *identity.Peer // nil for our own
-	user string
+	link  *Link          // set when a session was named
+	peer  *identity.Peer // nil for our own
+	user  string
+	human bool // user/human: the person, to read it
 }
 
 // resolve turns a "to" string into a connected session or a person.
@@ -553,6 +624,7 @@ type target struct {
 //	user/name, user/name#ref    a session of a peer
 //	user/ or user/*             a peer; their human picks the session
 //	user                        same, when we have no session by that name
+//	human, user/human           the person themselves, to read it
 func (m *Mesh) resolve(to string) (target, error) {
 	t := strings.TrimPrefix(strings.TrimSpace(to), "@")
 	ref := ""
@@ -575,6 +647,9 @@ func (m *Mesh) resolve(to string) (target, error) {
 	links := m.snapshot()
 	m.mu.Unlock()
 
+	if name == proto.Human {
+		return target{peer: peer, user: user, human: true}, nil
+	}
 	if hasUser && (name == "" || name == "*") && ref == "" {
 		if peer == nil {
 			return target{}, errors.New("name one of your sessions; addressing a person applies to other people")
@@ -622,4 +697,174 @@ func (m *Mesh) resolve(to string) (target, error) {
 		sort.Strings(addrs)
 		return target{}, fmt.Errorf("%q is ambiguous, use one of: %s", to, strings.Join(addrs, ", "))
 	}
+}
+
+// heldNote is what your phone shows for a message held here, worded as the
+// app's own list words it.
+func (m *Mesh) heldNote(h *inbox.Held) push.Note {
+	m.mu.Lock()
+	here := m.info.Name + "@" + m.info.Host
+	m.mu.Unlock()
+	n := push.Note{Kind: push.Held, ID: h.ID, Text: h.Msg.Text}
+	switch {
+	case h.Note:
+		n.Title = "From " + h.Msg.From
+	case h.Outbound:
+		n.Title, n.Text = "Waiting to send to "+h.Msg.To, here+": "+h.Msg.Text
+	case h.Target == "":
+		n.Title = "From " + h.Msg.From + " · pick a session"
+	default:
+		n.Title = "From " + h.Msg.From + " → " + here
+	}
+	return n
+}
+
+// pushNote seals n for the phones registered on this machine and has the
+// rendezvous server forward it. It runs in the background: a lost note
+// only costs a notification, and the app shows the message when opened.
+func (m *Mesh) pushNote(n push.Note) {
+	if m.cfg.Kind != proto.KindSession || m.cfg.Server == "" {
+		return
+	}
+	m.reloadPeers() // a phone may have just registered with another session here
+	m.mu.Lock()
+	secret, phone := m.peers.Self.Secret, m.peers.Self.Pushable()
+	m.mu.Unlock()
+	if phone == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(m.ctx, 30*time.Second)
+		defer cancel()
+		switch err := m.node.Push(ctx, phone.Token, push.Seal(secret, n)); {
+		case errors.Is(err, transport.ErrUnregistered):
+			// The app is gone or has a new token it hasn't told us yet.
+			m.dropPhoneToken(phone.Token)
+		case err != nil:
+			m.log.Printf("push to %s: %v", phone.Name, err)
+		}
+	}()
+}
+
+// registerPhone records your phone's push token in peers.json, from where
+// it syncs to your other machines. An empty token stops pushes.
+func (m *Mesh) registerPhone(name, device, token string) error {
+	if device == "" {
+		return errors.New("no device")
+	}
+	return m.updatePhone(func(old *identity.Phone) (*identity.Phone, bool) {
+		if token == "" && (old == nil || old.Device != device) {
+			return nil, false // a phone we already replaced
+		}
+		if old != nil && old.Device == device && old.Token == token && old.Name == name {
+			return nil, false
+		}
+		if name == "" && old != nil {
+			name = old.Name
+		}
+		return &identity.Phone{Name: identity.CleanName(name), Device: device, Token: token}, true
+	})
+}
+
+// dropPhoneToken stops pushes to a token the push service has forgotten,
+// unless the phone has since registered a new one.
+func (m *Mesh) dropPhoneToken(token string) {
+	err := m.updatePhone(func(old *identity.Phone) (*identity.Phone, bool) {
+		if old == nil || old.Token != token {
+			return nil, false
+		}
+		p := *old
+		p.Token = ""
+		return &p, true
+	})
+	if err != nil {
+		m.log.Printf("dropping the phone's push token: %v", err)
+	}
+}
+
+// updatePhone applies change to Self.Phone in peers.json and syncs it.
+func (m *Mesh) updatePhone(change func(old *identity.Phone) (*identity.Phone, bool)) error {
+	err := m.cfg.Store.Update(func(ps *identity.Peers) error {
+		p, ok := change(ps.Self.Phone)
+		if !ok {
+			return errUnchanged
+		}
+		p.Updated = time.Now().UTC()
+		ps.Self.Phone = p
+		return nil
+	})
+	if errors.Is(err, errUnchanged) {
+		return nil
+	}
+	if err == nil {
+		m.reloadPeers() // and tell your other machines
+	}
+	return err
+}
+
+// fakeHeld holds a made-up message from a made-up person, for this
+// session (or, for you, as a person), so you can try approving it in
+// `peerbus tui` or the app. It goes through the inbox, history and pushes
+// like a real one; approving it delivers nothing.
+func (m *Mesh) fakeHeld(from, text string, forYou bool) (proto.SendResult, error) {
+	from = identity.CleanName(from)
+	text = strings.TrimSpace(text)
+	if text == "" || len(text) > proto.MaxText {
+		return proto.SendResult{}, errors.New("give the message some text")
+	}
+	m.mu.Lock()
+	me := m.info
+	m.mu.Unlock()
+	msg := proto.Message{
+		ID: proto.NewID(6), Thread: proto.NewID(6),
+		From: from + "/test#000000", FromUser: from,
+		To: m.SelfAddress(), Text: text, SentAt: time.Now().Unix(),
+	}
+	h := &inbox.Held{Msg: msg, Peer: identity.Key(make([]byte, ed25519.PublicKeySize)), PeerName: from, Target: me.SID, Fake: true}
+	if forYou {
+		h.Target, h.Msg.To = "", m.selfName()+"/"
+	}
+	if err := m.inbox.Add(h); err != nil {
+		return proto.SendResult{}, err
+	}
+	m.record(proto.HistoryEntry{ID: msg.ID, Thread: msg.Thread, From: msg.From, To: h.Msg.To, Peer: from, Text: text, At: msg.SentAt, Status: "held", Fake: true})
+	m.pushNote(m.heldNote(h))
+	return proto.SendResult{Status: "held", ID: h.ID, Thread: msg.Thread, To: h.Msg.To}, nil
+}
+
+// SendAsYou sends text from your own TUI or phone. It isn't held by your
+// send=ask setting: you're the one sending it.
+func (m *Mesh) SendAsYou(ctx context.Context, to, text, thread string) (proto.SendResult, error) {
+	return m.send(ctx, to, text, thread, "", true)
+}
+
+// noteForHuman keeps a message for the person in this machine's inbox, to
+// read in `peerbus tui` and on their phone, and pushes it to the phone.
+// key is the sender's identity: a friend's, or ours.
+func (m *Mesh) noteForHuman(msg proto.Message, peer *identity.Peer, key ed25519.PublicKey) (proto.SendResult, error) {
+	h := &inbox.Held{Msg: msg, Peer: identity.Key(key), Note: true}
+	rec := proto.HistoryEntry{ID: msg.ID, Thread: msg.Thread, From: msg.From, To: msg.To, Text: msg.Text, At: msg.SentAt, Status: "delivered"}
+	if peer != nil {
+		h.PeerName, rec.Peer = peer.Name, peer.Name
+	}
+	if err := m.inbox.Add(h); err != nil {
+		return proto.SendResult{}, fmt.Errorf("couldn't keep the message: %w", err)
+	}
+	m.record(rec)
+	m.pushNote(m.heldNote(h))
+	return proto.SendResult{Status: "delivered", ID: msg.ID, Thread: msg.Thread, To: msg.To}, nil
+}
+
+func orNewID(id string) string {
+	if id == "" {
+		return proto.NewID(6)
+	}
+	return id
+}
+
+func orNewThread(thread string) string {
+	if thread = proto.CleanThread(thread); thread == "" {
+		return proto.NewID(6)
+	}
+	return thread
 }

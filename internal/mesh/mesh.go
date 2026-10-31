@@ -521,9 +521,6 @@ func (m *Mesh) unlink(l *Link) {
 }
 
 func (m *Mesh) describe(l *Link) string {
-	if l.kind == proto.KindControl {
-		return m.userOf(l) + "/cli"
-	}
 	return m.addr(l)
 }
 
@@ -668,7 +665,7 @@ func (m *Mesh) addr(l *Link) string {
 	info, kind := l.info, l.kind
 	l.mu.Unlock()
 	if kind == proto.KindControl {
-		return m.userOf(l) + "/cli"
+		return m.userOf(l) + "/" + info.Name // cli, or human for a TUI or phone
 	}
 	return proto.Address(m.userOf(l), info.Name, info.SID)
 }
@@ -685,6 +682,7 @@ func (m *Mesh) Views() []proto.PeerView {
 	links := newestPerSession(m.snapshot())
 	m.mu.Unlock()
 	var out []proto.PeerView
+	people := map[string]bool{}
 	for _, l := range links {
 		l.mu.Lock()
 		kind, info, peer, path := l.kind, l.info, l.peer, l.conn.Path
@@ -706,6 +704,15 @@ func (m *Mesh) Views() []proto.PeerView {
 		}
 		v.Address = proto.Address(v.User, v.Name, info.SID)
 		out = append(out, v)
+		if peer != nil {
+			people[v.User] = true
+		}
+	}
+	// Each person, reachable in their TUI and on their phone: you always,
+	// friends while any session of theirs is.
+	out = append(out, humanView(m.selfName(), false))
+	for u := range people {
+		out = append(out, humanView(u, true))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Foreign != out[j].Foreign {
@@ -714,6 +721,10 @@ func (m *Mesh) Views() []proto.PeerView {
 		return out[i].Address < out[j].Address
 	})
 	return out
+}
+
+func humanView(user string, foreign bool) proto.PeerView {
+	return proto.PeerView{Address: user + "/" + proto.Human, User: user, Name: proto.Human, Status: "person", Foreign: foreign}
 }
 
 // newestPerSession keeps one link per session (key and session id): the

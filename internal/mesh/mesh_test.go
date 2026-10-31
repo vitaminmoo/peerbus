@@ -692,3 +692,172 @@ func TestStaleLinkToRestartedSession(t *testing.T) {
 		t.Fatalf("bob's session listed %d times", n)
 	}
 }
+
+// inboxOf asks a session for its machine's inbox, as the TUI does.
+func inboxOf(t *testing.T, ctl *Mesh, sid string) proto.InboxView {
+	t.Helper()
+	var view proto.InboxView
+	for _, l := range ctl.Own() {
+		if l.Info().SID == sid {
+			if err := l.Request(context.Background(), proto.Frame{Type: proto.TInbox}, &view); err != nil {
+				t.Fatal(err)
+			}
+			return view
+		}
+	}
+	t.Fatalf("no session %s", sid)
+	return view
+}
+
+// The person is a session of its own, user/human: messages to it wait in
+// the inbox to read, from agents and friends alike, and the TUI or phone
+// sends from it, so replies reach the person.
+func TestHuman(t *testing.T) {
+	srv := server(t)
+	alice, bob := store(t, "alice"), store(t, "bob")
+	pair(t, alice, bob)
+	laptop := otherMachine(t, alice)
+	deskState := t.TempDir()
+
+	desk, evDesk := start(t, alice, deskState, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"})
+	start(t, laptop, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "l1l1l1l1", Name: "notes", Host: "laptop", Status: "idle"})
+	b1, _ := start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
+	ctl, _ := start(t, alice, deskState, srv, proto.KindControl, proto.SessionInfo{SID: "ph", Name: proto.Human, Host: "pixel"})
+	waitFor(t, "everyone to meet", func() bool {
+		return sees(b1, "alice/ghidra#d1d1d1") && sees(desk, "alice/notes#l1l1l1") && len(ctl.Own()) == 2
+	})
+	if !sees(b1, "alice/human") || !sees(desk, "alice/human") || !sees(desk, "bob/human") {
+		t.Fatal("people missing from the peer list")
+	}
+
+	// An agent writes to its own person: kept on its machine, not held.
+	res, err := desk.Send(context.Background(), "human", "the build is done", "")
+	if err != nil || res.Status != "delivered" || res.To != "alice/human" {
+		t.Fatalf("to own human: %+v %v", res, err)
+	}
+	// A friend's agent writes to alice the person: kept wherever it lands,
+	// without approval.
+	res, err = b1.Send(context.Background(), "alice/human", "lunch?", "")
+	if err != nil || res.Status != "delivered" {
+		t.Fatalf("from a friend: %+v %v", res, err)
+	}
+	var notes []proto.HeldView
+	waitFor(t, "both notes to be kept", func() bool {
+		notes = append(inboxOf(t, ctl, "d1d1d1d1").Held, inboxOf(t, ctl, "l1l1l1l1").Held...)
+		return len(notes) == 2
+	})
+	for _, n := range notes {
+		if !n.Note || n.Routed {
+			t.Fatalf("not a note: %+v", n)
+		}
+	}
+	// Notes are read and dismissed, never approved into a session.
+	for _, sid := range []string{"d1d1d1d1", "l1l1l1l1"} {
+		for _, h := range inboxOf(t, ctl, sid).Held {
+			for _, l := range ctl.Own() {
+				if l.Info().SID == sid {
+					if err := l.Request(context.Background(), proto.Frame{Type: proto.TApprove, ID: h.ID}, nil); err == nil {
+						t.Fatal("approved a note into a session")
+					}
+					if err := l.Request(context.Background(), proto.Frame{Type: proto.TDeny, ID: h.ID}, nil); err != nil {
+						t.Fatalf("dismissing: %v", err)
+					}
+				}
+			}
+		}
+	}
+	if n := len(inboxOf(t, ctl, "d1d1d1d1").Held) + len(inboxOf(t, ctl, "l1l1l1l1").Held); n != 0 {
+		t.Fatalf("%d notes left after dismissing", n)
+	}
+
+	// The phone writes as alice the person; the session sees who, and its
+	// reply comes back as a note.
+	res, err = ctl.SendAsYou(context.Background(), "alice/ghidra", "how's it going?", "")
+	if err != nil || res.Status != "delivered" {
+		t.Fatalf("from the phone: %+v %v", res, err)
+	}
+	m := evDesk.msg(t)
+	if m.From != "alice/human" || m.Text != "how's it going?" {
+		t.Fatalf("delivered: %+v", m)
+	}
+	if res, err := desk.Send(context.Background(), m.From, "fine, thanks", m.Thread); err != nil || res.Status != "delivered" {
+		t.Fatalf("reply: %+v %v", res, err)
+	}
+	waitFor(t, "the reply to wait for alice", func() bool {
+		for _, h := range inboxOf(t, ctl, "d1d1d1d1").Held {
+			if h.Text == "fine, thanks" && h.Note && h.Thread == m.Thread {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// The phone registers once, with any session; every machine learns it.
+func TestPhoneRegistrationSyncs(t *testing.T) {
+	srv := server(t)
+	alice := store(t, "alice")
+	laptop := otherMachine(t, alice)
+	deskState := t.TempDir()
+	desk, _ := start(t, alice, deskState, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"})
+	start(t, laptop, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "l1l1l1l1", Name: "notes", Host: "laptop", Status: "idle"})
+	ctl, _ := start(t, alice, deskState, srv, proto.KindControl, proto.SessionInfo{SID: "ph", Name: proto.Human, Host: "pixel"})
+	waitFor(t, "the machines to meet", func() bool { return sees(desk, "alice/notes#l1l1l1") && len(ctl.Own()) == 2 })
+
+	var deskLink *Link
+	for _, l := range ctl.Own() {
+		if l.Info().SID == "d1d1d1d1" {
+			deskLink = l
+		}
+	}
+	reg := proto.Frame{Type: proto.TPushRegister, Meta: map[string]string{"name": "Pixel 10", "device": "dev1", "token": "tok1"}}
+	if err := deskLink.Request(context.Background(), reg, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the laptop to learn the phone", func() bool {
+		ps, _ := laptop.Load()
+		p := ps.Self.Pushable()
+		return p != nil && p.Token == "tok1" && p.Name == "Pixel-10"
+	})
+	// Forgetting it, likewise.
+	reg.Meta["token"] = ""
+	if err := deskLink.Request(context.Background(), reg, nil); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the laptop to stop pushing", func() bool {
+		ps, _ := laptop.Load()
+		return ps.Self.Phone != nil && ps.Self.Pushable() == nil
+	})
+}
+
+// peerbus fake holds a made-up message that approving delivers nowhere.
+func TestFakeHeld(t *testing.T) {
+	srv := server(t)
+	alice := store(t, "alice")
+	state := t.TempDir()
+	desk, evDesk := start(t, alice, state, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"})
+	cli, _ := start(t, alice, state, srv, proto.KindControl, proto.SessionInfo{SID: "cli", Name: "cli", Host: "desk"})
+	waitFor(t, "the cli to reach the session", func() bool { return len(cli.Locals()) == 1 })
+	l := cli.Locals()[0]
+	var res proto.SendResult
+	if err := l.Request(context.Background(), proto.Frame{Type: proto.TFakeHeld, Text: "try me", Meta: map[string]string{"from": "carol"}}, &res); err != nil || res.Status != "held" {
+		t.Fatalf("fake: %+v %v", res, err)
+	}
+	view := inboxOf(t, cli, "d1d1d1d1")
+	if len(view.Held) != 1 || !view.Held[0].Fake || view.Held[0].Peer != "carol" || view.Held[0].Target != "d1d1d1d1" {
+		t.Fatalf("inbox: %+v", view)
+	}
+	var ar proto.SendResult
+	if err := l.Request(context.Background(), proto.Frame{Type: proto.TApprove, ID: view.Held[0].ID}, &ar); err != nil || ar.Status != "delivered" {
+		t.Fatalf("approve: %+v %v", ar, err)
+	}
+	select {
+	case m := <-evDesk.msgs:
+		t.Fatalf("a fake message reached the session: %+v", m)
+	case <-time.After(300 * time.Millisecond):
+	}
+	h, _ := desk.History()
+	if len(h.Messages) != 1 || !h.Messages[0].Fake || h.Messages[0].Status != "delivered" {
+		t.Fatalf("history: %+v", h.Messages)
+	}
+}

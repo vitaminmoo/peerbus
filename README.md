@@ -22,6 +22,7 @@ formats may still change.
 | Identity, invites, pairing, permissions | Working |
 | Held messages: `peerbus tui` across all your machines, `inbox` / `approve` / `deny` on one | Working |
 | Rendezvous server (`peerbus rendezvous`) | Working; public instance at `rv.peerb.us:47615` |
+| Android app (`android/`): the TUI's inbox, push notifications | New; push needs a Firebase project |
 
 ## How it works
 
@@ -117,6 +118,13 @@ Tools Claude gets:
 The CLI does the same from a shell: `peerbus peers`, `peerbus send`,
 `peerbus inbox`, `peerbus approve`, `peerbus deny`.
 
+Each person is also a session of their own, `user/human`: messages to it
+never reach an agent, so they aren't held for approval. They wait for
+the person to read in `peerbus tui` and on their phone, with a
+notification. An agent can write to its own user's to say something
+while they're away from the terminal; the TUI and phone send as it, so
+replies to what you write there come back to you.
+
 `peerbus tui` is where the human handles held messages: every one on all
 your machines, with the full text, to approve, decline, or route to any of
 your sessions on any machine. Nothing in it reaches an agent until you act.
@@ -124,7 +132,20 @@ your sessions on any machine. Nothing in it reaches an agent until you act.
 received in the last 30 days, on every machine, and what became of it;
 `f` narrows it to messages between your own sessions or with friends.
 Each machine keeps its part in `~/.local/state/peerbus/history.jsonl`,
-readable only by you, like the inbox.
+readable only by you, like the inbox. `n` writes to any session you can
+reach, yours or a friend's, and `r` replies to a message in its thread.
+
+To try all this without a friend, `peerbus fake [-from NAME] [-to
+SESSION|you] [TEXT]` has a session on this machine hold a made-up
+message. It goes through the inbox, history and notifications like a
+real one; approving it delivers nothing.
+
+The Android app does what the TUI does, from your phone, and notifies
+you when something is held or written to you. Pair it with `peerbus
+phone`, which shows a QR code to scan; `peerbus peers` and `peerbus id`
+then list it. Notifications come as pushes your sessions seal with your
+self secret and the rendezvous server relays through Firebase; see
+`android/README.md`.
 
 ## Rendezvous server
 
@@ -132,7 +153,9 @@ readable only by you, like the inbox.
 peerbus rendezvous -listen 0.0.0.0:47615
 ```
 
-UDP only, and it holds nothing but live registrations. `deploy/` has a
+UDP only, and it holds nothing but live registrations. With
+`-fcm-credentials service-account.json` it also relays sessions' sealed
+push notifications to the Android app through Firebase. `deploy/` has a
 systemd user unit. Point clients at your own with
 `{"rendezvous": "host:47615"}` in `~/.config/peerbus/client.json`; invite
 codes carry the server, so friends follow automatically. `"none"` keeps
@@ -170,6 +193,9 @@ Layout:
 | `internal/identity`, `internal/pairing` | Keys, peers, permissions, invites |
 | `internal/inbox` | Held messages and thread approvals |
 | `internal/history` | Messages each machine's sessions sent and received |
+| `internal/held` | Held messages across your machines, for the TUI and the app |
+| `internal/push`, `internal/fcm` | Sealed push notes for phones; the server's Firebase sender |
+| `mobile`, `android/` | The Android app's Go core (gomobile) and the app |
 | `internal/proto` | Frames sessions exchange |
 | `site/` | https://peerb.us (Workers static assets) |
 

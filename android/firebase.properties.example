@@ -1,0 +1,6 @@
+# Copy to firebase.properties (gitignored) with the values from the
+# Firebase console: Project settings > General > Your apps > Android app.
+appId=1:000000000000:android:0000000000000000000000
+apiKey=AIza...
+projectId=your-project
+senderId=000000000000

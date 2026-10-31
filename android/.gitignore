@@ -1,0 +1,8 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+app/libs/
+firebase.properties
+*.iml
+.idea/

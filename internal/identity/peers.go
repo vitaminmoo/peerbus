@@ -26,6 +26,26 @@ type Self struct {
 	NameUpdated time.Time `json:"nameUpdated,omitempty"`
 	// Secret is shared by all your devices; your sessions meet under it.
 	Secret Secret `json:"secret"`
+	// Phone is your phone running the peerbus app, where your sessions
+	// push notes about held messages. One per person.
+	Phone *Phone `json:"phone,omitempty"`
+}
+
+// Phone is a paired phone's push registration. Forgetting the phone keeps
+// the entry with no token, so the change reaches your other machines.
+type Phone struct {
+	Name    string    `json:"name"`
+	Device  string    `json:"device"`          // the app's own id, stable across tokens
+	Token   string    `json:"token,omitempty"` // its Firebase Cloud Messaging token
+	Updated time.Time `json:"updated"`
+}
+
+// Pushable is the phone to push to, or nil.
+func (s Self) Pushable() *Phone {
+	if s.Phone == nil || s.Phone.Token == "" {
+		return nil
+	}
+	return s.Phone
 }
 
 type Peer struct {
@@ -173,6 +193,11 @@ func (ps *Peers) Merge(o *Peers) bool {
 	changed := false
 	if o.Self.NameUpdated.After(ps.Self.NameUpdated) && o.Self.Name != "" {
 		ps.Self.Name, ps.Self.NameUpdated = o.Self.Name, o.Self.NameUpdated
+		changed = true
+	}
+	if in := o.Self.Phone; in != nil && !in.Updated.IsZero() && (ps.Self.Phone == nil || in.Updated.After(ps.Self.Phone.Updated)) {
+		cp := *in
+		ps.Self.Phone = &cp
 		changed = true
 	}
 	for _, in := range o.Peers {

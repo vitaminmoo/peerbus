@@ -65,7 +65,8 @@ func (i Invite) Encode() string {
 }
 
 func Decode(code string) (Invite, error) {
-	code = strings.Join(strings.Fields(code), "")
+	// Lowercase as printed; uppercase in QR codes, where it packs smaller.
+	code = strings.ToLower(strings.Join(strings.Fields(code), ""))
 	if !strings.HasPrefix(code, codePrefix) {
 		return Invite{}, errors.New("not a peerbus invite (should start with pb1-)")
 	}

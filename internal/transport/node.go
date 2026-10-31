@@ -371,7 +371,7 @@ func (n *Node) onControl(c ctl) {
 		n.observed, n.registered = c.Observed, time.Now()
 		n.mu.Unlock()
 		n.regOnce.Do(func() { close(n.regOK) })
-	case "peers", "err":
+	case "peers", "pushed", "err":
 		n.mu.Lock()
 		ch := n.reqs[c.Req]
 		n.mu.Unlock()
@@ -493,6 +493,12 @@ func (n *Node) punchLoop(p *punch, sp sigPayload, d time.Duration) {
 // request sends a control message with a fresh request id and waits for
 // the matching peers/err reply, retrying over lossy UDP.
 func (n *Node) request(ctx context.Context, c ctl) (ctl, error) {
+	return n.requestEvery(ctx, c, 500*time.Millisecond, 3)
+}
+
+// requestEvery sends c to the server up to tries times, every, until it
+// answers.
+func (n *Node) requestEvery(ctx context.Context, c ctl, every time.Duration, tries int) (ctl, error) {
 	srv := n.server()
 	if srv == nil {
 		return ctl{}, ErrNoServer
@@ -509,7 +515,7 @@ func (n *Node) request(ctx context.Context, c ctl) (ctl, error) {
 		n.mu.Unlock()
 	}()
 	pkt := ctlPacket(c)
-	for range 3 {
+	for range tries {
 		n.tr.WriteTo(pkt, srv)
 		select {
 		case r := <-ch:
@@ -519,7 +525,7 @@ func (n *Node) request(ctx context.Context, c ctl) (ctl, error) {
 			return r, nil
 		case <-ctx.Done():
 			return ctl{}, ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(every):
 		}
 	}
 	return ctl{}, errors.New("rendezvous server did not answer")

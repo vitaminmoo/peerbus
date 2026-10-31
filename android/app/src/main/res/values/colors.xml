@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="casing_bg">#191813</color>
+    <color name="icon_bg">#23211d</color>
+    <color name="ink">#2b2920</color>
+    <color name="amber">#f3b44a</color>
+</resources>

@@ -96,8 +96,12 @@ func runID(args []string) error {
 	if cfg.Machine == "" {
 		machineShown += " (hostname; set with -machine)"
 	}
-	fmt.Printf("Identity:    %s\nName:        %s\nMachine:     %s\nStore:       %s\nPeers:       %d (%d enabled)\n",
-		identity.Fingerprint(key.Public().(ed25519.PublicKey)), shown, machineShown, st.Dir, len(current), enabled)
+	phone := "none (pair one with: peerbus phone)"
+	if p := ps.Self.Pushable(); p != nil {
+		phone = fmt.Sprintf("%s, push registered %s", p.Name, p.Updated.Local().Format("2006-01-02 15:04"))
+	}
+	fmt.Printf("Identity:    %s\nName:        %s\nMachine:     %s\nPhone:       %s\nStore:       %s\nPeers:       %d (%d enabled)\n",
+		identity.Fingerprint(key.Public().(ed25519.PublicKey)), shown, machineShown, phone, st.Dir, len(current), enabled)
 	return nil
 }
 

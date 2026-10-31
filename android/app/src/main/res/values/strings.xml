@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">peerbus</string>
+    <string name="channel_held">Held messages</string>
+    <string name="channel_held_desc">Messages waiting for you to approve, route or decline</string>
+</resources>

@@ -71,8 +71,8 @@ func unhexText(dst, src []byte) error {
 
 // ctl is every control message; T selects the kind.
 //
-//	client -> server: reg{Key, Points}, query{Req, Point}, sig{Req, To, Payload}
-//	server -> client: regok{Handle, Observed}, peers{Req, Point, Handles}, sig{From, Payload}, err{Req, Msg}
+//	client -> server: reg{Key, Points}, query{Req, Point}, sig{Req, To, Payload}, push{Req, Token, Data}
+//	server -> client: regok{Handle, Observed}, peers{Req, Point, Handles}, sig{From, Payload}, pushed{Req, Msg}, err{Req, Msg}
 type ctl struct {
 	T        string          `json:"t"`
 	Req      uint32          `json:"req,omitempty"`
@@ -86,6 +86,8 @@ type ctl struct {
 	Observed string          `json:"observed,omitempty"`
 	Msg      string          `json:"msg,omitempty"`
 	Payload  json.RawMessage `json:"payload,omitempty"`
+	Token    string          `json:"token,omitempty"` // push: the device's push token
+	Data     string          `json:"data,omitempty"`  // push: an opaque, sealed note
 }
 
 func ctlPacket(c ctl) []byte {

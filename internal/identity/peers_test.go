@@ -159,3 +159,23 @@ func TestMaySeeByMachine(t *testing.T) {
 		}
 	}
 }
+
+func TestMergePhone(t *testing.T) {
+	now := time.Now()
+	mine := &Peers{}
+	phone := &Phone{Name: "pixel", Device: "d1", Token: "t1", Updated: now}
+	if !mine.Merge(&Peers{Self: Self{Phone: phone}}) || mine.Self.Pushable().Token != "t1" {
+		t.Fatal("phone not learned")
+	}
+	phone.Token = "changed" // the merged copy is mine, not shared
+	if mine.Self.Phone.Token != "t1" {
+		t.Fatal("merge shared the pointer")
+	}
+	if mine.Merge(&Peers{Self: Self{Phone: &Phone{Device: "d0", Token: "old", Updated: now.Add(-time.Hour)}}}) {
+		t.Fatal("an older registration won")
+	}
+	// Forgotten elsewhere: the empty token wins and stops pushes.
+	if !mine.Merge(&Peers{Self: Self{Phone: &Phone{Device: "d1", Updated: now.Add(time.Minute)}}}) || mine.Self.Pushable() != nil {
+		t.Fatal("forgetting the phone didn't sync")
+	}
+}

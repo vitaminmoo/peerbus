@@ -33,7 +33,11 @@ var (
 	screen   = lipgloss.NewStyle().Border(lipgloss.ThickBorder()).BorderForeground(cBeige).Foreground(cAmber).Padding(0, 1)
 )
 
-var laneColour = [...]lipgloss.Color{cOrange, cMustard, cTeal}
+// laneColour is each inbox section's, filterColour each history filter's.
+var (
+	laneColour   = [...]lipgloss.Color{cGlitch, cOrange, cMustard, cTeal}
+	filterColour = [...]lipgloss.Color{cOrange, cMustard, cTeal}
+)
 
 // hazard draws n stripe cells in c.
 func hazard(c lipgloss.Color, n int) string {
@@ -69,6 +73,9 @@ func (m *model) View() string {
 	list, detail := m.list, m.detail
 	if m.page == historyPage {
 		list, detail = m.historyList, m.historyDetail
+	}
+	if m.mode == composing {
+		detail = m.composeView
 	}
 	if w >= 96 {
 		lw := max(38, w*2/5)
@@ -116,11 +123,11 @@ func (m *model) list(w, h int) string {
 	}
 	cur := section(-1)
 	for i, it := range m.items {
-		if s := it.section(); s != cur {
+		if s := it.Section(); s != cur {
 			cur = s
 			n := 0
 			for _, x := range m.items {
-				if x.section() == s {
+				if x.Section() == s {
 					n++
 				}
 			}
@@ -146,15 +153,20 @@ func (m *model) list(w, h int) string {
 
 func (m *model) row(it item, sel bool, w int) string {
 	var who string
-	switch it.section() {
+	switch it.Section() {
+	case toRead:
+		who = m.shortAddr(it.View.From) + " → you"
 	case forSession:
-		who = it.v.Peer + " → " + m.sessionLabel(it.v.Target)
+		who = it.View.Peer + " → " + m.sessionLabel(it.View.Target)
 	case forYou:
-		who = it.v.Peer + " → you"
+		who = it.View.Peer + " → you"
 	case yours:
-		who = m.sessionLabel(it.v.Target) + " → " + it.v.Peer
+		who = m.sessionLabel(it.View.Target) + " → " + it.View.Peer
 	}
-	age := ago(it.v.HeldAt)
+	age := ago(it.View.HeldAt)
+	if it.View.Fake {
+		age = "test " + age
+	}
 	marker := "  "
 	if sel {
 		marker = "▸ "
@@ -177,7 +189,7 @@ func (m *model) historyList(w, h int) string {
 		return "\n" + dim.Render("  "+glitch(m.frame, 12)+"  gathering history…")
 	}
 	shown := m.shown()
-	lines := []string{hazard(laneColour[m.filter], 2) + " " + label.Render(strings.ToUpper(filterTitles[m.filter])) + " " + dim.Render(fmt.Sprint(len(shown)))}
+	lines := []string{hazard(filterColour[m.filter], 2) + " " + label.Render(strings.ToUpper(filterTitles[m.filter])) + " " + dim.Render(fmt.Sprint(len(shown)))}
 	if len(shown) == 0 {
 		return strings.Join(lines, "\n") + "\n\n" + amber.Render("  ░▒▓ NOTHING YET ▓▒░") + "\n\n" + dim.Render("  Messages your sessions send and\n  receive appear here. f filters.")
 	}
@@ -190,14 +202,14 @@ func (m *model) historyList(w, h int) string {
 }
 
 func (m *model) historyRow(r record, sel bool, w int) string {
-	who := m.shortAddr(r.e.From) + " → " + m.shortAddr(r.e.To)
-	age := ago(r.e.At)
+	who := m.shortAddr(r.Entry.From) + " → " + m.shortAddr(r.Entry.To)
+	age := ago(r.Entry.At)
 	marker := "  "
 	if sel {
 		marker = "▸ "
 	}
 	glyph, gs := "●", good
-	switch r.e.Status {
+	switch r.Entry.Status {
 	case "held", "ask":
 		glyph, gs = "◌", amber
 	case "declined", "unsent":
@@ -221,7 +233,7 @@ func (m *model) historyDetail(w, h int) string {
 	if !ok {
 		return ""
 	}
-	e := r.e
+	e := r.Entry
 	field := func(k, v string) string { return label.Render(fmt.Sprintf("%-7s", k)) + v }
 	when := time.Unix(e.At, 0).Format("Jan 02 15:04")
 	lines := []string{
@@ -229,13 +241,13 @@ func (m *model) historyDetail(w, h int) string {
 		field("TO", e.To),
 		field("SENT", fmt.Sprintf("%s · %s ago · thread %s", when, ago(e.At), e.Thread)),
 		field("STATUS", m.statusText(e)),
-		field("LOGGED", "on "+strings.Join(r.machines, ", ")),
+		field("LOGGED", "on "+strings.Join(r.Machines, ", ")),
 		"",
 	}
 	text := e.Text
 	more := ""
 	if e.Cut {
-		if t, ok := m.full[r.key()]; ok {
+		if t, ok := m.full[r.Key()]; ok {
 			text = t
 		} else {
 			more = dim.Render("… loading the rest")
@@ -262,23 +274,36 @@ func (m *model) detail(w, h int) string {
 	}
 	field := func(k, v string) string { return label.Render(fmt.Sprintf("%-7s", k)) + v }
 	var lines []string
-	switch it.section() {
+	switch it.Section() {
+	case toRead:
+		lines = append(lines, field("FROM", it.View.From), field("TO", "you "+dim.Render("· to read; r replies")))
 	case forSession:
-		lines = append(lines, field("FROM", it.v.From), field("TO", it.v.To+dim.Render("  "+m.sessionLabel(it.v.Target))))
+		lines = append(lines, field("FROM", it.View.From), field("TO", it.View.To+dim.Render("  "+m.sessionLabel(it.View.Target))))
 	case forYou:
-		lines = append(lines, field("FROM", it.v.From), field("TO", "you, as a person "+dim.Render("· pick a session")))
+		lines = append(lines, field("FROM", it.View.From), field("TO", "you, as a person "+dim.Render("· pick a session")))
 	case yours:
-		lines = append(lines, field("FROM", it.v.From), field("TO", it.v.To), field("", dim.Render("held by your send=ask setting for "+it.v.Peer)))
+		lines = append(lines, field("FROM", it.View.From), field("TO", it.View.To), field("", dim.Render("held by your send=ask setting for "+it.View.Peer)))
 	}
-	lines = append(lines, field("HELD", fmt.Sprintf("on %s · %s ago · thread %s", it.machine, ago(it.v.HeldAt), it.v.Thread)), "")
-	text := lipgloss.NewStyle().Width(w - 4).Render(it.v.Text)
+	lines = append(lines, field("HELD", fmt.Sprintf("on %s · %s ago · thread %s", it.Machine, ago(it.View.HeldAt), it.View.Thread)))
+	if it.View.Fake {
+		lines = append(lines, field("", amber.Render("a test message from peerbus fake: approving it delivers nothing")))
+	}
+	lines = append(lines, "")
+	text := lipgloss.NewStyle().Width(w - 4).Render(it.View.Text)
 	tl := strings.Split(text, "\n")
 	if room := h - len(lines) - 4; len(tl) > room && room > 1 {
 		tl = append(tl[:room-1], dim.Render(fmt.Sprintf("… %d more lines", len(tl)-room+1)))
 	}
 	lines = append(lines, screen.Width(w-2).Render(strings.Join(tl, "\n")))
 	if m.mode == confirmingDeny {
-		lines = append(lines, "", bad.Render("Decline this message? ")+dim.Render(it.v.Peer+" is told.  ")+keycap.Render("y")+" yes  "+keycap.Render("any")+" no")
+		q, why := "Decline this message? ", it.View.Peer+" is told.  "
+		switch {
+		case it.View.Note:
+			q, why = "Dismiss this message? ", ""
+		case it.View.Fake:
+			why = "It's a test.  "
+		}
+		lines = append(lines, "", bad.Render(q)+dim.Render(why)+keycap.Render("y")+" yes  "+keycap.Render("any")+" no")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -286,20 +311,20 @@ func (m *model) detail(w, h int) string {
 func (m *model) picker(it item, w int) string {
 	lines := []string{
 		hazard(cTeal, 2) + " " + label.Render("ROUTE TO ONE OF YOUR SESSIONS"),
-		dim.Render("from " + it.v.From),
+		dim.Render("from " + it.View.From),
 		"",
 	}
 	host := ""
 	for i, s := range m.sessions {
-		if s.info.Host != host {
-			host = s.info.Host
+		if s.Info.Host != host {
+			host = s.Info.Host
 			lines = append(lines, label.Render("  "+strings.ToUpper(host)))
 		}
 		dot := good.Render("●")
-		if s.info.Status != "idle" {
+		if s.Info.Status != "idle" {
 			dot = lipgloss.NewStyle().Foreground(cOrange).Render("●")
 		}
-		line := fmt.Sprintf("%-18s %-6s %s", truncate(s.info.Name, 18), s.info.Status, s.info.Cwd)
+		line := fmt.Sprintf("%-18s %-6s %s", truncate(s.Info.Name, 18), s.Info.Status, s.Info.Cwd)
 		line = truncate(line, w-6)
 		if i == m.pick {
 			lines = append(lines, "  "+dot+" "+selected.Render(line))
@@ -328,16 +353,22 @@ func (m *model) footer(w int) string {
 	case routing:
 		s = k("↑↓", "pick") + k("enter", "deliver there") + k("esc", "back")
 	case confirmingDeny:
-		s = k("y", "decline") + k("any", "keep")
+		s = k("y", "yes") + k("any", "keep")
+	case composing:
+		if m.compose.to == "" {
+			s = k("↑↓", "pick") + k("enter", "write to") + k("esc", "cancel")
+		} else {
+			s = k("enter", "send") + k("alt+enter", "new line") + k("esc", "cancel")
+		}
 	case browsing:
 		if m.page == historyPage {
 			held := "inbox"
 			if n := len(m.items); n > 0 {
 				held = fmt.Sprintf("inbox (%d held)", n)
 			}
-			s = k("↑↓", "move") + k("f", "filter") + k("tab", held) + k("q", "quit")
+			s = k("↑↓", "move") + k("r", "reply") + k("n", "write") + k("f", "filter") + k("tab", held) + k("q", "quit")
 		} else {
-			s = k("↑↓", "move") + k("a", "approve") + k("r", "route") + k("d", "decline") + k("tab", "history") + k("q", "quit")
+			s = k("↑↓", "move") + k("a", "approve") + k("r", "route/reply") + k("d", "decline") + k("n", "write") + k("tab", "history") + k("q", "quit")
 		}
 	}
 	return truncate(s, w)

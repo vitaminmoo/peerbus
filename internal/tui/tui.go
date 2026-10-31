@@ -10,21 +10,16 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/vitaminmoo/peerbus/internal/held"
 	"github.com/vitaminmoo/peerbus/internal/mesh"
-	"github.com/vitaminmoo/peerbus/internal/proto"
 )
 
-const (
-	refreshEvery = 2 * time.Second
-	askTimeout   = 4 * time.Second
-)
+const refreshEvery = 2 * time.Second
 
 // Run shows the TUI until the user quits.
 func Run(ctx context.Context, m *mesh.Mesh, self string) error {
@@ -33,38 +28,20 @@ func Run(ctx context.Context, m *mesh.Mesh, self string) error {
 	return err
 }
 
-type section int
-
-const (
-	forSession section = iota // held for a particular session
-	forYou                    // sent to you as a person: pick a session
-	yours                     // ours, waiting on send=ask
+type (
+	section = held.Section
+	item    = held.Item
+	session = held.Session
 )
 
-var sectionTitles = [...]string{"held for a session", "for you · pick a session", "yours · waiting to send"}
+const (
+	toRead     = held.ToRead
+	forSession = held.ForSession
+	forYou     = held.ForYou
+	yours      = held.Yours
+)
 
-type item struct {
-	v       proto.HeldView
-	machine string
-	inbox   string       // which inbox holds it
-	via     []*mesh.Link // sessions sharing that inbox
-}
-
-func (it item) section() section {
-	switch {
-	case it.v.Outbound:
-		return yours
-	case it.v.Routed:
-		return forYou
-	}
-	return forSession
-}
-
-type session struct {
-	link *mesh.Link
-	info proto.SessionInfo
-	addr string
-}
+var sectionTitles = held.SectionTitles
 
 type page int
 
@@ -79,6 +56,7 @@ const (
 	browsing mode = iota
 	routing
 	confirmingDeny
+	composing
 )
 
 type model struct {
@@ -92,6 +70,7 @@ type model struct {
 	cursor   int
 	pick     int // routing: chosen session
 	mode     mode
+	compose  *compose
 
 	page page
 
@@ -140,64 +119,11 @@ func anim() tea.Cmd {
 	return tea.Tick(120*time.Millisecond, func(time.Time) tea.Msg { return animMsg{} })
 }
 
-// askAll sends f to every session in own and collects the answers by
-// inbox: sessions on one machine share one, so the first answer per inbox
-// wins, and byInbox lists the sessions that can act on each.
-func askAll[T any](ctx context.Context, own []*mesh.Link, f proto.Frame, inboxOf func(T) string) (views map[string]T, byInbox map[string][]*mesh.Link) {
-	views, byInbox = map[string]T{}, map[string][]*mesh.Link{}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	for _, l := range own {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ctx, cancel := context.WithTimeout(ctx, askTimeout)
-			defer cancel()
-			var v T
-			if err := l.Request(ctx, f, &v); err != nil {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			id := inboxOf(v)
-			byInbox[id] = append(byInbox[id], l)
-			if _, ok := views[id]; !ok {
-				views[id] = v
-			}
-		}()
-	}
-	wg.Wait()
-	return views, byInbox
-}
-
 // fetch asks every session of ours for its inbox.
 func (m *model) fetch() tea.Cmd {
 	return func() tea.Msg {
-		own := m.mesh.Own()
-		var sessions []session
-		for _, l := range own {
-			sessions = append(sessions, session{link: l, info: l.Info(), addr: l.Address()})
-		}
-		views, byInbox := askAll(m.ctx, own, proto.Frame{Type: proto.TInbox}, func(v proto.InboxView) string { return v.InboxID })
-		var items []item
-		for id, v := range views {
-			for _, h := range v.Held {
-				items = append(items, item{v: h, machine: v.Machine, inbox: id, via: byInbox[id]})
-			}
-		}
-		sort.Slice(items, func(i, j int) bool {
-			if a, b := items[i].section(), items[j].section(); a != b {
-				return a < b
-			}
-			return items[i].v.HeldAt > items[j].v.HeldAt
-		})
-		sort.Slice(sessions, func(i, j int) bool {
-			if sessions[i].info.Host != sessions[j].info.Host {
-				return sessions[i].info.Host < sessions[j].info.Host
-			}
-			return sessions[i].addr < sessions[j].addr
-		})
-		return fetchedMsg{items: items, sessions: sessions, machines: len(views)}
+		snap := held.Fetch(m.ctx, m.mesh)
+		return fetchedMsg{items: snap.Items, sessions: snap.Sessions, machines: snap.Machines}
 	}
 }
 
@@ -237,10 +163,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		if msg.err != nil {
 			m.say(msg.err.Error(), true)
+			if m.mode == composing {
+				return m, nil // keep what was written
+			}
 		} else {
 			m.say(msg.text, false)
 		}
-		m.mode = browsing
+		m.mode, m.compose = browsing, nil
 		return m, m.fetch()
 	case tea.KeyMsg:
 		return m.key(msg)
@@ -251,12 +180,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) applyFetch(f fetchedMsg) {
 	var keep string
 	if it, ok := m.current(); ok {
-		keep = it.v.ID
+		keep = it.View.ID
 	}
 	for _, it := range f.items {
-		if !m.seen[it.v.ID] {
-			m.seen[it.v.ID] = true
-			if m.loaded && !it.v.Outbound {
+		if !m.seen[it.View.ID] {
+			m.seen[it.View.ID] = true
+			if m.loaded && !it.View.Outbound {
 				notify(it)
 			}
 		}
@@ -265,7 +194,7 @@ func (m *model) applyFetch(f fetchedMsg) {
 	m.cursor, m.pick = 0, min(m.pick, max(0, len(m.sessions)-1))
 	found := false
 	for i, it := range m.items {
-		if it.v.ID == keep {
+		if it.View.ID == keep {
 			m.cursor, found = i, true
 		}
 	}
@@ -276,8 +205,8 @@ func (m *model) applyFetch(f fetchedMsg) {
 
 func notify(it item) {
 	if path, err := exec.LookPath("notify-send"); err == nil {
-		first, _, _ := strings.Cut(it.v.Text, "\n")
-		go exec.Command(path, "peerbus: message from "+it.v.From, first).Run()
+		first, _, _ := strings.Cut(it.View.Text, "\n")
+		go exec.Command(path, "peerbus: message from "+it.View.From, first).Run()
 	}
 }
 
@@ -295,6 +224,9 @@ func (m *model) say(s string, bad bool) { m.status, m.bad, m.statusT = s, bad, t
 func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if m.mode == composing {
+		return m.composeKey(k)
 	}
 	if k.String() == "tab" && m.mode == browsing {
 		return m, m.turnPage()
@@ -339,17 +271,23 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !ok || m.busy {
 			break
 		}
-		if it.section() == forYou {
+		if it.Section() == forYou {
 			m.startRouting(it)
 			break
 		}
 		return m, m.approve(it, session{})
+	case "n":
+		m.startCompose("", "")
 	case "r":
 		it, ok := m.current()
 		if !ok || m.busy {
 			break
 		}
-		if it.section() == yours {
+		if it.Section() == toRead {
+			m.startCompose(it.View.From, it.View.Thread)
+			break
+		}
+		if it.Section() == yours {
 			m.say("your own messages go where you sent them; approve or decline", true)
 			break
 		}
@@ -369,104 +307,52 @@ func (m *model) startRouting(it item) {
 	}
 	m.mode, m.pick = routing, 0
 	for i, s := range m.sessions {
-		if s.info.SID == it.v.Target {
+		if s.Info.SID == it.View.Target {
 			m.pick = i
 		}
 	}
 }
 
+func (m *model) snapshot() held.Snapshot {
+	return held.Snapshot{Items: m.items, Sessions: m.sessions, Machines: m.machines}
+}
+
 // approve acts on it: delivered where it was sent, or to s when routing,
 // or for one of ours, sent.
 func (m *model) approve(it item, to session) tea.Cmd {
-	var via *mesh.Link
-	frame := proto.Frame{Type: proto.TApprove, ID: it.v.ID}
-	switch {
-	case it.v.Outbound:
-		via = m.sessionLink(it.v.Target)
-		if via == nil {
-			m.say("the session that wrote this isn't running any more; decline it", true)
-			return nil
-		}
-	case to.link != nil:
-		frame.To = to.info.SID
-	default:
-		if m.sessionLink(it.v.Target) == nil {
-			m.say("that session is gone; press r to route it to another", true)
-			return nil
-		}
-		frame.To = it.v.Target
+	var dest *session
+	if to.Link != nil {
+		dest = &to
 	}
-	if via == nil {
-		via = pickVia(it, it.v.Target)
-	}
-	if via == nil {
-		m.say("no session on "+it.machine+" is online to hand it over", true)
+	a, err := m.snapshot().Approve(it, dest)
+	if err != nil {
+		m.say(err.Error(), true)
 		return nil
 	}
 	m.busy = true
 	m.say("delivering…", false)
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 15*time.Second)
-		defer cancel()
-		var res proto.SendResult
-		if err := via.Request(ctx, frame, &res); err != nil {
-			return doneMsg{err: err}
-		}
-		if it.v.Outbound {
-			return doneMsg{text: "sent to " + res.To}
-		}
-		return doneMsg{text: "delivered to " + res.To}
-	}
+	return m.run(a)
 }
 
 func (m *model) deny(it item) tea.Cmd {
-	via := pickVia(it, it.v.Target)
-	if via == nil {
+	a, err := m.snapshot().Deny(it)
+	if err != nil {
 		m.mode = browsing
-		m.say("no session on "+it.machine+" is online to decline it", true)
+		m.say(err.Error(), true)
 		return nil
 	}
 	m.busy = true
+	return m.run(a)
+}
+
+func (m *model) run(a held.Action) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
-		defer cancel()
-		if err := via.Request(ctx, proto.Frame{Type: proto.TDeny, ID: it.v.ID}, nil); err != nil {
-			return doneMsg{err: err}
-		}
-		return doneMsg{text: "declined; " + it.v.Peer + " is told"}
+		text, err := a.Run(m.ctx)
+		return doneMsg{text: text, err: err}
 	}
 }
 
-// pickVia chooses a session on the holding machine, preferring sid.
-func pickVia(it item, sid string) *mesh.Link {
-	for _, l := range it.via {
-		if l.Info().SID == sid {
-			return l
-		}
-	}
-	if len(it.via) > 0 {
-		return it.via[0]
-	}
-	return nil
-}
-
-func (m *model) sessionLink(sid string) *mesh.Link {
-	for _, s := range m.sessions {
-		if s.info.SID == sid {
-			return s.link
-		}
-	}
-	return nil
-}
-
-func (m *model) sessionLabel(sid string) string {
-	for _, s := range m.sessions {
-		if s.info.SID == sid {
-			return s.info.Name + "@" + s.info.Host
-		}
-	}
-	return "(gone)"
-}
+func (m *model) sessionLabel(sid string) string { return m.snapshot().Label(sid) }
 
 func ago(unix int64) string {
 	d := time.Since(time.Unix(unix, 0))

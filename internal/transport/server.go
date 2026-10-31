@@ -20,7 +20,10 @@ type Server struct {
 	// RelayRate is the sustained relay budget per handle in bytes/second
 	// (default 1 MiB/s), with a burst of twice that.
 	RelayRate float64
+	// Push forwards push notifications to phones; nil turns pushing off.
+	Push Pusher
 
+	pushes  pushes
 	conn    *net.UDPConn
 	regs    map[Handle]*registration
 	byAddr  map[string]Handle
@@ -157,6 +160,13 @@ func (s *Server) control(addr *net.UDPAddr, c ctl) {
 			}
 		}
 		s.reply(addr, ctl{T: "peers", Req: c.Req, Point: c.Point, Handles: hs})
+
+	case "push":
+		from, r := s.sender(addr)
+		if r == nil || c.Token == "" || c.Data == "" {
+			return
+		}
+		s.push(addr, from, c)
 
 	case "sig":
 		from, r := s.sender(addr)

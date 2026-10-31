@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"net"
+	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/vitaminmoo/peerbus/internal/identity"
 	"github.com/vitaminmoo/peerbus/internal/mesh"
@@ -114,13 +117,13 @@ func TestRouteAcrossMachines(t *testing.T) {
 		return len(m.items) == 1 && m.machines == 2 && len(m.sessions) == 2
 	})
 	it := m.items[0]
-	if it.machine != "laptop" || it.section() != forSession || m.sessionLabel(it.v.Target) != "notes@laptop" {
-		t.Fatalf("item: %+v on %s", it.v, it.machine)
+	if it.Machine != "laptop" || it.Section() != forSession || m.sessionLabel(it.View.Target) != "notes@laptop" {
+		t.Fatalf("item: %+v on %s", it.View, it.Machine)
 	}
 
 	m.startRouting(it)
 	for i, s := range m.sessions {
-		if s.info.SID == "d1d1d1d1" {
+		if s.Info.SID == "d1d1d1d1" {
 			m.pick = i
 		}
 	}
@@ -149,8 +152,8 @@ func TestRouteAcrossMachines(t *testing.T) {
 		t.Fatalf("history: %+v", m.hist)
 	}
 	r := m.hist[0]
-	if r.e.Text != "logs are ready" || r.e.Status != "delivered" || r.e.To != "alice/ghidra#d1d1d1" || len(r.machines) != 2 || !r.local || len(r.via) == 0 {
-		t.Fatalf("record: %+v on %v", r.e, r.machines)
+	if r.Entry.Text != "logs are ready" || r.Entry.Status != "delivered" || r.Entry.To != "alice/ghidra#d1d1d1" || len(r.Machines) != 2 || !r.Local || len(r.Via) == 0 {
+		t.Fatalf("record: %+v on %v", r.Entry, r.Machines)
 	}
 	m.filter = ownMessages
 	if len(m.shown()) != 0 {
@@ -159,5 +162,87 @@ func TestRouteAcrossMachines(t *testing.T) {
 	m.filter = friendMessages
 	if len(m.shown()) != 1 {
 		t.Fatal("friend filter lost it")
+	}
+}
+
+func typeText(m *model, s string) {
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
+}
+
+// You write to a session from the TUI as alice/human; its reply waits for
+// you to read, and replying keeps the thread.
+func TestWriteAndReply(t *testing.T) {
+	srv := rendezvous(t)
+	alice := named(t, "alice")
+	state := t.TempDir()
+	got := make(chan proto.Message, 4)
+	desk := run(t, alice, state, srv, proto.KindSession, proto.SessionInfo{SID: "d1d1d1d1", Name: "ghidra", Host: "desk", Status: "idle"}, got)
+	ctl := run(t, alice, state, srv, proto.KindControl, proto.SessionInfo{SID: "tui", Name: proto.Human, Host: "desk"}, nil)
+	m := newModel(context.Background(), ctl, "alice")
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	until(t, "the tui to reach the session", func() bool {
+		m.applyFetch(m.fetch()().(fetchedMsg))
+		return len(m.sessions) == 1
+	})
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+	if m.mode != composing {
+		t.Fatal("n didn't open the writer")
+	}
+	for i, v := range m.compose.targets {
+		if v.Address == "alice/ghidra#d1d1d1" {
+			m.compose.pick = i
+		}
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	typeText(m, "status?")
+	if v := m.View(); !strings.Contains(v, "WRITE TO alice/ghidra#d1d1d1") {
+		t.Fatalf("writer:\n%s", v)
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	done := cmd().(doneMsg)
+	if done.err != nil || !strings.Contains(done.text, "sent to alice/ghidra") {
+		t.Fatalf("send: %+v", done)
+	}
+	m.Update(done)
+	if m.mode != browsing || m.busy {
+		t.Fatal("still writing after sending")
+	}
+	var msg proto.Message
+	select {
+	case msg = <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("not delivered")
+	}
+	if msg.From != "alice/human" || msg.Text != "status?" {
+		t.Fatalf("delivered: %+v", msg)
+	}
+
+	if _, err := desk.Send(context.Background(), msg.From, "all green", msg.Thread); err != nil {
+		t.Fatal(err)
+	}
+	until(t, "the reply to wait for you", func() bool {
+		m.applyFetch(m.fetch()().(fetchedMsg))
+		return len(m.items) == 1
+	})
+	if it := m.items[0]; it.Section() != toRead || it.View.Text != "all green" {
+		t.Fatalf("reply: %+v", it.View)
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	if m.mode != composing || m.compose.to != "alice/ghidra#d1d1d1" || m.compose.thread != msg.Thread {
+		t.Fatalf("reply writer: %+v", m.compose)
+	}
+	typeText(m, "thanks")
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if done := cmd().(doneMsg); done.err != nil {
+		t.Fatal(done.err)
+	}
+	select {
+	case r := <-got:
+		if r.Thread != msg.Thread || r.Text != "thanks" {
+			t.Fatalf("reply delivered: %+v", r)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("reply not delivered")
 	}
 }

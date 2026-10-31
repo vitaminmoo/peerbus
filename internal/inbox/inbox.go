@@ -33,6 +33,8 @@ type Held struct {
 	PeerName string        `json:"peerName"`            // our name for them when it was held
 	Target   string        `json:"targetSid,omitempty"` // session it is for (inbound) or from (outbound); empty: the human picks
 	Outbound bool          `json:"outbound,omitempty"`  // ours, waiting for our own approval (send=ask)
+	Fake     bool          `json:"fake,omitempty"`      // made by `peerbus fake` to try approving; approving delivers nothing
+	Note     bool          `json:"note,omitempty"`      // to the person (user/human), to read: never delivered to a session
 	HeldAt   time.Time     `json:"heldAt"`
 }
 
@@ -41,8 +43,8 @@ func (h *Held) View() proto.HeldView {
 	return proto.HeldView{
 		ID: h.ID, From: h.Msg.From, To: h.Msg.To, Thread: h.Msg.Thread,
 		Peer: h.PeerName, Target: h.Target,
-		Routed: h.Target == "" && !h.Outbound, Outbound: h.Outbound,
-		HeldAt: h.HeldAt.Unix(), Text: h.Msg.Text,
+		Routed: h.Target == "" && !h.Outbound && !h.Note, Outbound: h.Outbound,
+		HeldAt: h.HeldAt.Unix(), Text: h.Msg.Text, Fake: h.Fake, Note: h.Note,
 	}
 }
 

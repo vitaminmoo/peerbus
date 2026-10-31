@@ -169,6 +169,7 @@ func Merge(dst *proto.HistoryEntry, e proto.HistoryEntry) {
 	if dst.Peer == "" {
 		dst.Peer = e.Peer
 	}
+	dst.Fake = dst.Fake || e.Fake
 	if e.To != "" && (dst.To == "" || e.Text == "") {
 		dst.To = e.To // a change names where the message ended up
 	}
