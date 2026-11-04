@@ -84,6 +84,12 @@ A session started without it would silently drop incoming messages, so
 peerbus stays off there and its Claude tells you why. So does a second
 copy of a conversation resumed while the first is still open.
 
+peerbus can only check this by reading Claude Code's command line. Where it
+can't, or where a peer runs a peerbus too old to say (`version=unknown`), the
+session joins and shows as `channels=unverified`: it's connected, but its
+agent may never see what you send, whatever the send result says. Only a reply
+proves a message arrived.
+
 Sessions on one machine now see each other. For more machines and for
 friends:
 
@@ -111,7 +117,8 @@ Tools Claude gets:
 | Tool | |
 |---|---|
 | `list_peers` | Reachable sessions, their status, host and path (local, direct, relay), and what they advertise (MCP servers, programs, repos). Optional filter. |
-| `send` | Plain text to a session; pass `thread` to continue a conversation. |
+| `send` | Plain text to a session; pass `thread` and `reply_to` to answer a message. |
+| `threads` | This session's own conversations, or the messages of one. Never another session's, or anything still waiting for approval. |
 | `subscribe_idle` | One notice when a session next finishes its turn or disconnects. |
 | `advertise` | Publish extra resources this session can offer. |
 
@@ -128,12 +135,29 @@ replies to what you write there come back to you.
 `peerbus tui` is where the human handles held messages: every one on all
 your machines, with the full text, to approve, decline, or route to any of
 your sessions on any machine. Nothing in it reaches an agent until you act.
-`tab` switches to the history: every message your sessions sent and
-received in the last 30 days, on every machine, and what became of it;
-`f` narrows it to messages between your own sessions or with friends.
-Each machine keeps its part in `~/.local/state/peerbus/history.jsonl`,
-readable only by you, like the inbox. `n` writes to any session you can
-reach, yours or a friend's, and `r` replies to a message in its thread.
+`tab` switches to the history: every conversation your sessions had in
+the last 30 days, on every machine, and what became of each message;
+`f` narrows it to conversations between your own sessions or with
+friends, and `enter` opens one. Each machine keeps its part in
+`~/.local/state/peerbus/history.jsonl`, readable only by you, like the
+inbox. `n` writes to any session you can reach, yours or a friend's, and
+`r` replies to a message in its thread.
+
+`d` deletes a conversation from all your machines, and ends any approval
+of it, so follow-ups from a friend ask again. A machine that's off hears
+when a client next sees it and a machine that knows. Messages waiting for
+your decision stay until you make it. Other people's copies are theirs;
+they aren't told. A new message in the thread starts it over on its own.
+
+After installing a new peerbus, `peerbus reload` switches every running
+session on all your machines to the binary on its disk. Each replaces its
+process in place, so Claude Code keeps the connection and needs no `/mcp`
+reconnect, and each first checks the new binary can take over, so a bad
+one is refused rather than taking your sessions down. A machine needs its
+own new binary; one that hasn't got one says so and carries on. The agent's
+instructions stay as they were until a session reconnects for real, as
+those are only read when it connects. Sessions off the mesh (started
+without the channels flag) can't hear the request.
 
 To try all this without a friend, `peerbus fake [-from NAME] [-to
 SESSION|you] [TEXT]` has a session on this machine hold a made-up

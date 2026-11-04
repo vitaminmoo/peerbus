@@ -121,9 +121,23 @@ func TestEndToEnd(t *testing.T) {
 	if n.Params.Content != "build is green\nmerged #42" || meta["from"] != "alice/one#aaaaaa" || meta["foreign"] != "false" || meta["kind"] != "message" {
 		t.Fatalf("bad notification %+v", n)
 	}
-	two.callText(t, "send", map[string]any{"to": meta["from"], "text": "thanks", "thread": meta["thread"]})
-	if r := one.notification(t); r.Params.Content != "thanks" || r.Params.Meta["thread"] != meta["thread"] {
+	if _, ok := meta["reply_to"]; ok {
+		t.Fatalf("a new message carries reply_to: %+v", meta)
+	}
+	two.callText(t, "send", map[string]any{"to": meta["from"], "text": "thanks", "thread": meta["thread"], "reply_to": meta["msg_id"]})
+	if r := one.notification(t); r.Params.Content != "thanks" || r.Params.Meta["thread"] != meta["thread"] || r.Params.Meta["reply_to"] != meta["msg_id"] {
 		t.Fatalf("bad reply %+v", r)
+	}
+	// Each session can look over its conversations, and only its own.
+	if l := one.callText(t, "threads", map[string]any{}); !strings.Contains(l, "thread "+meta["thread"]+"  2 messages") {
+		t.Fatalf("threads:\n%s", l)
+	}
+	shown := one.callText(t, "threads", map[string]any{"thread": meta["thread"]})
+	if !strings.Contains(shown, "merged #42") || !strings.Contains(shown, "reply_to="+meta["msg_id"]) {
+		t.Fatalf("thread:\n%s", shown)
+	}
+	if l := b1.callText(t, "threads", map[string]any{}); l != "No conversations yet." {
+		t.Fatalf("bob's session sees:\n%s", l)
 	}
 
 	// Idle subscription driven by the registry file.
@@ -212,6 +226,158 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if r := two.notification(t); r.Params.Content != "from the shell" || r.Params.Meta["from"] != "alice/cli" {
 		t.Fatalf("cli delivery: %+v", r)
+	}
+}
+
+// TestReload swaps the binary under running `peerbus channel` processes and
+// asks them to switch. Like Claude Code, the test keeps talking to the same
+// pipes and never repeats the handshake.
+func TestReload(t *testing.T) {
+	dir := t.TempDir()
+	build := filepath.Join(dir, "build", "peerbus")
+	if out, err := exec.Command("go", "build", "-o", build, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	bin := filepath.Join(dir, "bin", "peerbus")
+	// Installs atomically, as `go install` does, so running ones keep the old
+	// file. Each install is a new file, which is how sessions tell.
+	install := func(content []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		tmp := bin + ".new"
+		if err := os.WriteFile(tmp, content, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, bin); err != nil {
+			t.Fatal(err)
+		}
+	}
+	good, err := os.ReadFile(build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	install(good)
+
+	uc, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	rv := uc.LocalAddr().String()
+	uc.Close()
+	rvCmd := exec.Command(build, "rendezvous", "-listen", rv)
+	if err := rvCmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rvCmd.Process.Kill(); rvCmd.Wait() })
+
+	alice := newUser(t, dir, "alice", rv)
+	one := startChannel(t, bin, alice, "one", "aaaaaaaa-1111", "idle")
+	two := startChannel(t, bin, alice, "two", "bbbbbbbb-2222", "idle")
+	waitListing := func(p *channelProc, want string) string {
+		t.Helper()
+		var l string
+		for i := 0; i < 150; i++ {
+			if l = p.callText(t, "list_peers", map[string]any{}); strings.Contains(l, want) {
+				return l
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("listing lacks %q:\n%s", want, l)
+		return ""
+	}
+	waitListing(one, "alice/two#bbbbbb")
+	waitListing(two, "alice/one#aaaaaa")
+	one.callText(t, "advertise", map[string]any{"resources": []map[string]any{{"kind": "note", "name": "still-here"}}})
+	waitListing(two, "still-here")
+
+	reload := func() (string, error) {
+		cmd := exec.Command(build, "reload") // not bin, which the test breaks on purpose
+		cmd.Env = alice.env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	pid := one.cmd.Process.Pid
+
+	// Nothing new on disk: nothing to do, and nobody drops off the mesh.
+	if out, err := reload(); err != nil || strings.Count(out, "already running") != 2 {
+		t.Fatalf("reload with nothing new: %v\n%s", err, out)
+	}
+
+	// A binary that can't take over is refused and everyone carries on.
+	install([]byte("#!/bin/sh\nexit 1\n"))
+	if out, err := reload(); err == nil || strings.Count(out, "can't take over") != 2 {
+		t.Fatalf("reload to a bad binary: %v\n%s", err, out)
+	}
+	if l := one.callText(t, "list_peers", map[string]any{}); !strings.Contains(l, "alice/two#bbbbbb") {
+		t.Fatalf("after refusing:\n%s", l)
+	}
+
+	// The real thing, with a request half-written across the switch.
+	before := one.callText(t, "send", map[string]any{"to": "two", "text": "before the reload"})
+	if !strings.HasPrefix(before, "Delivered") {
+		t.Fatal(before)
+	}
+	if n := two.notification(t); n.Params.Content != "before the reload" {
+		t.Fatalf("%+v", n)
+	}
+	install(good)
+	one.nextID++
+	req, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": one.nextID, "method": "tools/call", "params": map[string]any{"name": "threads", "arguments": map[string]any{}}})
+	half := len(req) / 2
+	if _, err := one.in.Write(req[:half]); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	out, err := reload()
+	if err != nil || strings.Count(out, "reloaded") != 2 {
+		t.Fatalf("reload: %v\n%s", err, out)
+	}
+	if _, err := one.in.Write(append(req[half:], '\n')); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-one.resp:
+		if r.Error != nil || !strings.Contains(string(r.Result), "before the reload") {
+			t.Fatalf("the split request: %s %+v", r.Result, r.Error)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the request split across the switch got no answer")
+	}
+
+	// The same process, running the new file.
+	if one.cmd.Process.Pid != pid || one.cmd.ProcessState != nil {
+		t.Fatal("the process didn't survive")
+	}
+	running, err := os.Stat(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk, _ := os.Stat(bin)
+	if !os.SameFile(running, onDisk) {
+		t.Fatal("still running the old file")
+	}
+	select {
+	case n := <-one.notes:
+		if n.Method != "notifications/tools/list_changed" {
+			t.Fatalf("first notice after reloading: %s", n.Method)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no tools/list_changed")
+	}
+	// Still reachable and still advertising, without a new handshake; both ways.
+	l := waitListing(two, "still-here")
+	if !strings.Contains(l, "alice/one#aaaaaa") {
+		t.Fatalf("address changed:\n%s", l)
+	}
+	<-two.notes // its own list_changed
+	if out := one.callText(t, "send", map[string]any{"to": "two", "text": "after the reload"}); !strings.HasPrefix(out, "Delivered") {
+		t.Fatal(out)
+	}
+	if n := two.notification(t); n.Params.Content != "after the reload" {
+		t.Fatalf("%+v", n)
+	}
+	// Nothing of the handover is left lying around.
+	if left, _ := filepath.Glob(filepath.Join(alice.state, "resume-*")); len(left) != 0 {
+		t.Fatalf("left behind: %v", left)
 	}
 }
 

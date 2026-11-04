@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -462,6 +463,8 @@ type sessionJSON struct {
 	Status string `json:"status"`
 	Cwd    string `json:"cwd"`
 	Addr   string `json:"addr"`
+	// Channels is proto.ChannelsOn or, from an older peerbus, maybe nothing.
+	Channels string `json:"channels"`
 }
 
 func encode(snap held.Snapshot, views []proto.PeerView, live bool, self string) string {
@@ -477,16 +480,16 @@ func encode(snap held.Snapshot, views []proto.PeerView, live bool, self string) 
 		out.Items = append(out.Items, itemJSON{HeldView: it.View, Section: int(it.Section()), Machine: it.Machine, TargetLabel: snap.Label(it.View.Target)})
 	}
 	for _, s := range snap.Sessions {
-		out.Sessions = append(out.Sessions, sessionJSON{SID: s.Info.SID, Name: s.Info.Name, Host: s.Info.Host, Status: s.Info.Status, Cwd: s.Info.Cwd, Addr: s.Addr})
+		out.Sessions = append(out.Sessions, sessionJSON{SID: s.Info.SID, Name: s.Info.Name, Host: s.Info.Host, Status: s.Info.Status, Cwd: s.Info.Cwd, Addr: s.Addr, Channels: s.Info.Channels})
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
 }
 
 // Send writes text as you (user/human) to an address from the snapshot's
-// people, continuing thread when it isn't empty. Replies come back to
-// read in the inbox.
-func (c *Client) Send(to, text, thread string) (string, error) {
+// people, continuing thread and answering the message replyTo when they
+// aren't empty. Replies come back to read in the inbox.
+func (c *Client) Send(to, text, thread, replyTo string) (string, error) {
 	c.mu.Lock()
 	m := c.m
 	c.mu.Unlock()
@@ -495,7 +498,7 @@ func (c *Client) Send(to, text, thread string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	res, err := m.SendAsYou(ctx, to, text, thread)
+	res, err := m.SendAsYou(ctx, to, text, thread, replyTo)
 	if err != nil {
 		return "", err
 	}
@@ -534,6 +537,26 @@ func (c *Client) History() (string, error) {
 	c.mu.Unlock()
 	b, _ := json.Marshal(out)
 	return string(b), nil
+}
+
+// DeleteThread forgets a thread on this phone and every machine with a
+// session online; the rest hear of it later. It says what happened.
+func (c *Client) DeleteThread(thread string) (string, error) {
+	c.mu.Lock()
+	m := c.m
+	c.mu.Unlock()
+	if m == nil {
+		return "", errors.New("not on the mesh")
+	}
+	kept, err := held.DeleteThread(context.Background(), m, thread)
+	if err != nil {
+		return "", err
+	}
+	c.Refresh()
+	if kept > 0 {
+		return fmt.Sprintf("thread deleted, except %d waiting for a decision in the inbox", kept), nil
+	}
+	return "thread deleted", nil
 }
 
 // FullText is the whole of a message the history cut short.

@@ -41,8 +41,8 @@ import us.peerb.app.HUMAN
 import us.peerb.app.Person
 import us.peerb.app.Snapshot
 
-/** Something to write: to an address, or to whoever gets picked; in a thread when replying. */
-data class Draft(val to: String? = null, val thread: String = "")
+/** Something to write: to an address, or to whoever gets picked; in a thread, answering a message, when replying. */
+data class Draft(val to: String? = null, val thread: String = "", val replyTo: String = "")
 
 /** Writing as you (user/human) to anyone you can reach. */
 @Composable
@@ -53,7 +53,7 @@ fun WriteScreen(draft: Draft, snap: Snapshot?, onDone: () -> Unit, onStatus: (St
     if (target == null) {
         Pick(snap, onCancel = onDone) { to = it.address }
     } else {
-        Compose(target, draft.thread, snap?.self.orEmpty(), onCancel = onDone, onSent = { onStatus(it); onDone() }, onError = onStatus)
+        Compose(target, draft.thread, draft.replyTo, snap?.self.orEmpty(), onCancel = onDone, onSent = { onStatus(it); onDone() }, onError = onStatus)
     }
 }
 
@@ -100,7 +100,8 @@ private fun Pick(snap: Snapshot?, onCancel: () -> Unit, onPick: (Person) -> Unit
                             Text("the person, to read", style = Type.monoSmall, color = c.muted)
                         } else {
                             Text(p.status, style = Type.monoSmall, color = if (p.status == "idle") Pal.teal else Pal.mustard, modifier = Modifier.widthIn(min = 56.dp).padding(end = 10.dp))
-                            Text(p.host, style = Type.monoSmall, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val detail = listOf(p.host, p.version, if (p.unverified) "channels unverified" else "").filter { it.isNotEmpty() }.joinToString("  ")
+                            Text(detail, style = Type.monoSmall, color = if (p.unverified) Pal.mustard else c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -110,7 +111,7 @@ private fun Pick(snap: Snapshot?, onCancel: () -> Unit, onPick: (Person) -> Unit
 }
 
 @Composable
-private fun Compose(to: String, thread: String, self: String, onCancel: () -> Unit, onSent: (Status) -> Unit, onError: (Status) -> Unit) {
+private fun Compose(to: String, thread: String, replyTo: String, self: String, onCancel: () -> Unit, onSent: (Status) -> Unit, onError: (Status) -> Unit) {
     val c = LocalCasing.current
     val scope = rememberCoroutineScope()
     var text by rememberSaveable(to, thread) { mutableStateOf("") }
@@ -158,7 +159,7 @@ private fun Compose(to: String, thread: String, self: String, onCancel: () -> Un
                     busy = true
                     scope.launch {
                         try {
-                            onSent(Status(Core.send(to, text.trim(), thread), false))
+                            onSent(Status(Core.send(to, text.trim(), thread, replyTo), false))
                         } catch (e: Exception) {
                             onError(Status(e.message ?: "couldn't send", true))
                         } finally {

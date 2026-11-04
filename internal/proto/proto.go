@@ -37,7 +37,19 @@ type SessionInfo struct {
 	// your own sessions only.
 	Started int64 `json:"started,omitempty"`
 	PID     int   `json:"pid,omitempty"`
+	// Channels says whether Claude Code was seen to be started with channels
+	// for peerbus. Version is the peerbus running the session. An older
+	// peerbus sends neither.
+	Channels string `json:"channels,omitempty"`
+	Version  string `json:"version,omitempty"`
 }
+
+// A session known to be without channels stays off the mesh, so a session
+// you can see is either on or unknown.
+const (
+	ChannelsOn      = "on"      // the flag is on Claude Code's command line
+	ChannelsUnknown = "unknown" // it couldn't be read, or an older peerbus didn't say
+)
 
 // PeerView is one reachable session as seen from here.
 type PeerView struct {
@@ -52,6 +64,8 @@ type PeerView struct {
 	Cwd       string     `json:"cwd,omitempty"`
 	Account   string     `json:"account,omitempty"`
 	Resources []Resource `json:"resources,omitempty"`
+	Channels  string     `json:"channels,omitempty"` // ChannelsOn or ChannelsUnknown; a person has none
+	Version   string     `json:"version,omitempty"`  // empty when an older peerbus didn't say
 }
 
 type Message struct {
@@ -63,6 +77,7 @@ type Message struct {
 	To       string `json:"to"`
 	Text     string `json:"text"`
 	SentAt   int64  `json:"sentAt"`
+	ReplyTo  string `json:"replyTo,omitempty"` // id of the message this answers
 }
 
 // Frame is the union of every frame; unused fields stay empty.
@@ -81,6 +96,8 @@ type Frame struct {
 	Text   string `json:"text,omitempty"`
 	Thread string `json:"thread,omitempty"`
 	ID     string `json:"id,omitempty"`
+	// ReplyTo is the id of the message a send answers.
+	ReplyTo string `json:"replyTo,omitempty"`
 
 	// result / notice
 	OK    bool              `json:"ok,omitempty"`
@@ -132,6 +149,14 @@ const (
 	// To "you" for you as a person, to try approving it. Approving it
 	// delivers nothing.
 	TFakeHeld = "fake_held"
+
+	// From your own CLI, TUI or phone to a session: forget a thread's
+	// messages (Thread) older than Meta["at"] in that machine's history.
+	TDeleteThread = "delete_thread"
+
+	// From your own CLI to a session: replace this process with the peerbus
+	// binary on disk, keeping the MCP connection to Claude Code.
+	TReload = "reload"
 )
 
 // Human is the session name that stands for a person rather than an
@@ -153,6 +178,9 @@ type SendResult struct {
 	ID     string `json:"id"`
 	Thread string `json:"thread"`
 	To     string `json:"to"`
+	// Unverified is set by the sender: the target session can't be shown to
+	// have channels on, so its agent may never see this.
+	Unverified bool `json:"-"`
 }
 
 func NewID(n int) string {
@@ -194,6 +222,8 @@ func CleanThread(t string) string {
 // HeldView is a waiting message as the CLI shows it.
 type HeldView struct {
 	ID       string `json:"id"`
+	MsgID    string `json:"msgId,omitempty"`   // the message's own id, which replies name
+	ReplyTo  string `json:"replyTo,omitempty"` // id of the message this answers
 	From     string `json:"from"`
 	To       string `json:"to"`
 	Thread   string `json:"thread"`
@@ -219,8 +249,9 @@ type InboxView struct {
 // ViewVersion is how a session reads the inbox and history its machine
 // shares, sent with its views of them. When sessions of different peerbus
 // versions share a machine, clients believe and act through the newest:
-// an older one misreads what it doesn't know (0 predates notes and fakes).
-const ViewVersion = 1
+// an older one misreads what it doesn't know (0 predates notes and fakes,
+// 1 predates deleted threads).
+const ViewVersion = 2
 
 // HistoryEntry is a message one of your sessions sent or received, or a
 // later change in what happened to it (Status, and To once a message held
@@ -229,14 +260,16 @@ const ViewVersion = 1
 type HistoryEntry struct {
 	ID     string `json:"id"`
 	Thread string `json:"thread,omitempty"`
-	From   string `json:"from"`
-	To     string `json:"to,omitempty"`
-	Peer   string `json:"peer,omitempty"` // our name for the other person; empty between your own sessions
-	Status string `json:"status"`         // delivered, held, ask (waiting on send=ask), declined, unsent (ask declined)
-	At     int64  `json:"at"`
-	Text   string `json:"text,omitempty"`
-	Cut    bool   `json:"cut,omitempty"`  // Text is only the start of the message
-	Fake   bool   `json:"fake,omitempty"` // made by `peerbus fake`; never reached a session
+	// ReplyTo is the id of the message this answers.
+	ReplyTo string `json:"replyTo,omitempty"`
+	From    string `json:"from"`
+	To      string `json:"to,omitempty"`
+	Peer    string `json:"peer,omitempty"` // our name for the other person; empty between your own sessions
+	Status  string `json:"status"`         // delivered, held, ask (waiting on send=ask), declined, unsent (ask declined)
+	At      int64  `json:"at"`
+	Text    string `json:"text,omitempty"`
+	Cut     bool   `json:"cut,omitempty"`  // Text is only the start of the message
+	Fake    bool   `json:"fake,omitempty"` // made by `peerbus fake`; never reached a session
 }
 
 // HistoryView is one machine's message history, as a session there reports
@@ -246,4 +279,29 @@ type HistoryView struct {
 	InboxID  string         `json:"inboxId"` // the same from every session sharing this history
 	Messages []HistoryEntry `json:"messages"`
 	V        int            `json:"v,omitempty"` // ViewVersion
+	// Deleted are the threads deleted here, so clients can carry a deletion
+	// to machines that were offline for it.
+	Deleted []Tombstone `json:"deleted,omitempty"`
+}
+
+// Tombstone records that a thread's messages up to At (unix seconds) were
+// deleted. Later messages in the thread stand on their own.
+type Tombstone struct {
+	Thread string `json:"thread"`
+	At     int64  `json:"at"`
+}
+
+// DeleteResult is what one machine did about deleting a thread.
+type DeleteResult struct {
+	Machine string `json:"machine"`
+	InboxID string `json:"inboxId"`
+	Removed int    `json:"removed"`
+	Kept    int    `json:"kept"` // still waiting for a decision in the inbox, so not deleted
+	V       int    `json:"v,omitempty"`
+}
+
+// ReloadResult is a session's answer to TReload.
+type ReloadResult struct {
+	Status  string `json:"status"` // reloading, current (the binary on disk is the one running)
+	Version string `json:"version,omitempty"`
 }

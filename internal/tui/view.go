@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/vitaminmoo/peerbus/internal/proto"
 )
 
 // Cassette futurism, as on peerb.us: a beige plate, a four-colour stripe,
@@ -182,14 +184,19 @@ func (m *model) row(it item, sel bool, w int) string {
 	return line
 }
 
-// historyList is the history page's list: one row per message, newest
-// first, under the current filter.
+// historyList is the history page's list: one row per conversation, newest
+// first, under the current filter, or one per message of the conversation
+// opened.
 func (m *model) historyList(w, h int) string {
 	if !m.histLoaded {
 		return "\n" + dim.Render("  "+glitch(m.frame, 12)+"  gathering history…")
 	}
 	shown := m.shown()
-	lines := []string{hazard(filterColour[m.filter], 2) + " " + label.Render(strings.ToUpper(filterTitles[m.filter])) + " " + dim.Render(fmt.Sprint(len(shown)))}
+	title := filterTitles[m.filter]
+	if m.hthread != "" {
+		title = "thread " + m.hthread
+	}
+	lines := []string{hazard(filterColour[m.filter], 2) + " " + label.Render(strings.ToUpper(title)) + " " + dim.Render(fmt.Sprint(len(shown)))}
 	if len(shown) == 0 {
 		return strings.Join(lines, "\n") + "\n\n" + amber.Render("  ░▒▓ NOTHING YET ▓▒░") + "\n\n" + dim.Render("  Messages your sessions send and\n  receive appear here. f filters.")
 	}
@@ -203,6 +210,9 @@ func (m *model) historyList(w, h int) string {
 
 func (m *model) historyRow(r record, sel bool, w int) string {
 	who := m.shortAddr(r.Entry.From) + " → " + m.shortAddr(r.Entry.To)
+	if n := m.threadCount(r.ThreadKey()); m.hthread == "" && n > 1 {
+		who += fmt.Sprintf(" (%d)", n)
+	}
 	age := ago(r.Entry.At)
 	marker := "  "
 	if sel {
@@ -242,8 +252,15 @@ func (m *model) historyDetail(w, h int) string {
 		field("SENT", fmt.Sprintf("%s · %s ago · thread %s", when, ago(e.At), e.Thread)),
 		field("STATUS", m.statusText(e)),
 		field("LOGGED", "on "+strings.Join(r.Machines, ", ")),
-		"",
 	}
+	if e.ReplyTo != "" {
+		lines = append(lines, field("REPLY", "to message "+e.ReplyTo))
+	}
+	if m.mode == confirmingDelete {
+		n := m.threadCount(r.ThreadKey())
+		lines = append(lines, "", bad.Render(fmt.Sprintf("Delete this thread (%d message%s) on all your machines? ", n, plural(n)))+keycap.Render("y")+" yes  "+keycap.Render("any")+" no")
+	}
+	lines = append(lines, "")
 	text := e.Text
 	more := ""
 	if e.Cut {
@@ -325,6 +342,9 @@ func (m *model) picker(it item, w int) string {
 			dot = lipgloss.NewStyle().Foreground(cOrange).Render("●")
 		}
 		line := fmt.Sprintf("%-18s %-6s %s", truncate(s.Info.Name, 18), s.Info.Status, s.Info.Cwd)
+		if s.Info.Channels != proto.ChannelsOn {
+			line = fmt.Sprintf("%-18s %-6s channels unverified  %s", truncate(s.Info.Name, 18), s.Info.Status, s.Info.Cwd)
+		}
 		line = truncate(line, w-6)
 		if i == m.pick {
 			lines = append(lines, "  "+dot+" "+selected.Render(line))
@@ -352,7 +372,7 @@ func (m *model) footer(w int) string {
 	switch m.mode {
 	case routing:
 		s = k("↑↓", "pick") + k("enter", "deliver there") + k("esc", "back")
-	case confirmingDeny:
+	case confirmingDeny, confirmingDelete:
 		s = k("y", "yes") + k("any", "keep")
 	case composing:
 		if m.compose.to == "" {
@@ -366,7 +386,11 @@ func (m *model) footer(w int) string {
 			if n := len(m.items); n > 0 {
 				held = fmt.Sprintf("inbox (%d held)", n)
 			}
-			s = k("↑↓", "move") + k("r", "reply") + k("n", "write") + k("f", "filter") + k("tab", held) + k("q", "quit")
+			if m.hthread != "" {
+				s = k("↑↓", "move") + k("r", "reply") + k("d", "delete thread") + k("esc", "back") + k("tab", held) + k("q", "quit")
+			} else {
+				s = k("↑↓", "move") + k("enter", "open") + k("r", "reply") + k("d", "delete") + k("n", "write") + k("f", "filter") + k("tab", held) + k("q", "quit")
+			}
 		} else {
 			s = k("↑↓", "move") + k("a", "approve") + k("r", "route/reply") + k("d", "decline") + k("n", "write") + k("tab", "history") + k("q", "quit")
 		}

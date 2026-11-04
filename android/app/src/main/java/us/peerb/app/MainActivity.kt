@@ -102,7 +102,7 @@ private fun Main(fromNotification: String?, consumed: () -> Unit) {
             when {
                 draft != null -> WriteScreen(draft, snap, onDone = { writing = null }, onStatus = { status = it })
                 tab == Tab.Inbox -> InboxPage(snap, open, { open = it }, { status = it }, { writing = it })
-                tab == Tab.History -> HistoryPage(snap?.self.orEmpty(), onWrite = { writing = it })
+                tab == Tab.History -> HistoryPage(snap?.self.orEmpty(), onWrite = { writing = it }, onStatus = { status = it })
                 else -> UnitPage()
             }
         }

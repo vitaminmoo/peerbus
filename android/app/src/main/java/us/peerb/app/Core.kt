@@ -157,7 +157,10 @@ object Core {
     suspend fun deny(id: String): String = withContext(Dispatchers.IO) { client.deny(id) }
 
     /** Writes as you (user/human); replies come back to read. */
-    suspend fun send(to: String, text: String, thread: String = ""): String = withContext(Dispatchers.IO) { client.send(to, text, thread) }
+    suspend fun send(to: String, text: String, thread: String = "", replyTo: String = ""): String = withContext(Dispatchers.IO) { client.send(to, text, thread, replyTo) }
+
+    /** Forgets a thread on every machine it can reach; says what happened. */
+    suspend fun deleteThread(thread: String): String = withContext(Dispatchers.IO) { client.deleteThread(thread) }
 
     suspend fun history(): List<Record> = withContext(Dispatchers.IO) { Record.parseAll(client.history()) }
 

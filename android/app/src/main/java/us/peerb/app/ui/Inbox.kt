@@ -280,7 +280,7 @@ private fun Detail(snap: Snapshot, h: Held, onClose: () -> Unit, onStatus: (Stat
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             when (h.section) {
-                Section.ToRead -> Keycap("Reply", { onClose(); onWrite(Draft(h.from, h.thread)) }, Modifier.weight(1.4f), key = "R", face = Pal.teal, enabled = !busy)
+                Section.ToRead -> Keycap("Reply", { onClose(); onWrite(Draft(h.from, h.thread, h.msgId)) }, Modifier.weight(1.4f), key = "R", face = Pal.teal, enabled = !busy)
                 Section.ForYou -> Keycap("Pick session", { mode = Mode.Routing }, Modifier.weight(1.4f), key = "A", face = Pal.mustard, enabled = !busy)
                 Section.Yours -> Keycap("Send", { act { Core.approve(h.id) } }, Modifier.weight(1f), key = "A", face = Pal.teal, enabled = !busy)
                 Section.ForSession -> Keycap("Approve", { act { Core.approve(h.id) } }, Modifier.weight(1.2f), key = "A", face = Pal.teal, enabled = !busy)
@@ -362,7 +362,7 @@ private fun Route(snap: Snapshot, h: Held, busy: Boolean, onCancel: () -> Unit, 
                         val fg = if (on) Pal.ink else c.fg
                         Text(s.name, fontFamily = Mono, fontWeight = FontWeight.Bold, color = fg, modifier = Modifier.widthIn(min = 120.dp).padding(end = 10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(s.status, style = Type.monoSmall, color = if (s.status == "idle") (if (on) Pal.ink else Pal.teal) else (if (on) Pal.ink else Pal.mustard), modifier = Modifier.widthIn(min = 56.dp).padding(end = 10.dp))
-                        Text(s.cwd, style = Type.monoSmall, color = if (on) Pal.ink else c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (s.channels != "on") "channels unverified  ${s.cwd}" else s.cwd, style = Type.monoSmall, color = if (on) Pal.ink else c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

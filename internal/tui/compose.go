@@ -19,14 +19,15 @@ import (
 type compose struct {
 	to      string // empty while picking
 	thread  string // set when replying
+	replyTo string // the message replied to
 	targets []proto.PeerView
 	pick    int
 	area    textarea.Model
 }
 
 // startCompose opens the writer: to a picked session, or straight to to
-// when replying in thread.
-func (m *model) startCompose(to, thread string) {
+// when replying to the message replyTo in thread.
+func (m *model) startCompose(to, thread, replyTo string) {
 	a := textarea.New()
 	a.Placeholder = "write as " + m.self + "/" + proto.Human + "…"
 	a.ShowLineNumbers = false
@@ -37,7 +38,7 @@ func (m *model) startCompose(to, thread string) {
 	a.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	a.FocusedStyle.Text = amber
 	a.Focus()
-	c := &compose{to: to, thread: thread, area: a}
+	c := &compose{to: to, thread: thread, replyTo: replyTo, area: a}
 	if to == "" {
 		for _, v := range m.mesh.Views() {
 			if v.Address != m.self+"/"+proto.Human {
@@ -84,11 +85,11 @@ func (m *model) composeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.say("sending…", false)
-		to, thread := c.to, c.thread
+		to, thread, replyTo := c.to, c.thread, c.replyTo
 		return m, func() tea.Msg {
 			ctx, cancel := context.WithTimeout(m.ctx, 20*time.Second)
 			defer cancel()
-			res, err := m.mesh.SendAsYou(ctx, to, text, thread)
+			res, err := m.mesh.SendAsYou(ctx, to, text, thread, replyTo)
 			if err != nil {
 				return doneMsg{err: err}
 			}
@@ -119,6 +120,12 @@ func (m *model) composeView(w, h int) string {
 				lines = append(lines, label.Render("  "+strings.ToUpper(user)))
 			}
 			line := fmt.Sprintf("%-18s %-7s %s", truncate(v.Name, 18), v.Status, v.Host)
+			if v.Version != "" {
+				line += "  " + v.Version
+			}
+			if v.Channels != proto.ChannelsOn {
+				line += "  channels unverified"
+			}
 			if v.Name == proto.Human {
 				line = fmt.Sprintf("%-18s %s", v.Name, "the person, to read")
 			}

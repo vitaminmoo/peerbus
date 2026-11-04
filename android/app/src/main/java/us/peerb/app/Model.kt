@@ -13,6 +13,8 @@ enum class Section(val title: String) {
 /** One held message, from the Go core's snapshot (mobile.itemJSON). */
 data class Held(
     val id: String,
+    /** The message's own id, which replies name. */
+    val msgId: String,
     val from: String,
     val to: String,
     val thread: String,
@@ -37,8 +39,13 @@ data class Person(
     val host: String,
     val status: String,
     val foreign: Boolean,
+    val channels: String,
+    /** The peerbus it runs; empty when an older one didn't say. */
+    val version: String,
 ) {
     val human get() = name == HUMAN
+    /** Connected, but its agent may not see what you send. */
+    val unverified get() = !human && channels != "on"
 }
 
 /** The session name that is a person rather than an agent (proto.Human). */
@@ -59,7 +66,12 @@ data class Record(
     val cut: Boolean,
     val fake: Boolean,
     val machines: List<String>,
+    /** The id of the message this answers, if any. */
+    val replyTo: String,
 ) {
+    /** Which conversation it belongs to; one logged without a thread is its own. */
+    val threadKey get() = thread.ifEmpty { key }
+
     companion object {
         fun parseAll(json: String): List<Record> {
             val a = org.json.JSONArray(json)
@@ -79,6 +91,7 @@ data class Record(
                     cut = r.optBoolean("cut"),
                     fake = r.optBoolean("fake"),
                     machines = List(ms?.length() ?: 0) { ms!!.getString(it) },
+                    replyTo = r.optString("replyTo"),
                 )
             }
         }
@@ -93,6 +106,7 @@ data class Sess(
     val status: String,
     val cwd: String,
     val addr: String,
+    val channels: String,
 ) {
     val label get() = "$name@$host"
 }
@@ -121,6 +135,7 @@ data class Snapshot(
                     val h = items.getJSONObject(i)
                     Held(
                         id = h.getString("id"),
+                        msgId = h.optString("msgId"),
                         from = h.optString("from"),
                         to = h.optString("to"),
                         thread = h.optString("thread"),
@@ -144,6 +159,7 @@ data class Snapshot(
                         status = s.optString("status"),
                         cwd = s.optString("cwd"),
                         addr = s.optString("addr"),
+                        channels = s.optString("channels"),
                     )
                 },
                 people = List(people.length()) { i ->
@@ -155,6 +171,8 @@ data class Snapshot(
                         host = p.optString("host"),
                         status = p.optString("status"),
                         foreign = p.optBoolean("foreign"),
+                        channels = p.optString("channels"),
+                        version = p.optString("version"),
                     )
                 },
             )

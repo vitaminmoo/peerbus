@@ -57,6 +57,7 @@ const (
 	routing
 	confirmingDeny
 	composing
+	confirmingDelete // the history page's thread under the cursor
 )
 
 type model struct {
@@ -76,7 +77,9 @@ type model struct {
 
 	// history page
 	hist        []record
-	hcursor     int // into shown()
+	hgen        int    // bumped by a deletion: what was being fetched is stale
+	hthread     string // the conversation opened, by ThreadKey; empty lists them all
+	hcursor     int    // into shown()
 	filter      filter
 	histLoaded  bool
 	histPolling bool
@@ -152,6 +155,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(histTick(), m.wantFull())
+	case deletedMsg:
+		m.applyDeleted(msg)
+		return m, m.wantFull()
 	case fullMsg:
 		if msg.err != nil {
 			delete(m.asked, msg.key)
@@ -198,7 +204,7 @@ func (m *model) applyFetch(f fetchedMsg) {
 			m.cursor, found = i, true
 		}
 	}
-	if m.mode != browsing && !found {
+	if (m.mode == routing || m.mode == confirmingDeny) && !found {
 		m.mode = browsing // what we were acting on is gone
 	}
 }
@@ -277,14 +283,14 @@ func (m *model) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.approve(it, session{})
 	case "n":
-		m.startCompose("", "")
+		m.startCompose("", "", "")
 	case "r":
 		it, ok := m.current()
 		if !ok || m.busy {
 			break
 		}
 		if it.Section() == toRead {
-			m.startCompose(it.View.From, it.View.Thread)
+			m.startCompose(it.View.From, it.View.Thread, it.View.MsgID)
 			break
 		}
 		if it.Section() == yours {

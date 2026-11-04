@@ -772,7 +772,7 @@ func TestHuman(t *testing.T) {
 
 	// The phone writes as alice the person; the session sees who, and its
 	// reply comes back as a note.
-	res, err = ctl.SendAsYou(context.Background(), "alice/ghidra", "how's it going?", "")
+	res, err = ctl.SendAsYou(context.Background(), "alice/ghidra", "how's it going?", "", "")
 	if err != nil || res.Status != "delivered" {
 		t.Fatalf("from the phone: %+v %v", res, err)
 	}

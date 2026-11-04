@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,10 +40,18 @@ type record = held.Record
 
 type (
 	histTickMsg struct{}
-	historyMsg  struct{ records []record }
-	fullMsg     struct {
+	historyMsg  struct {
+		records []record
+		gen     int
+	}
+	fullMsg struct {
 		key, text string
 		err       error
+	}
+	deletedMsg struct {
+		thread string // a ThreadKey
+		kept   int
+		err    error
 	}
 )
 
@@ -65,27 +75,87 @@ func (m *model) turnPage() tea.Cmd {
 
 // fetchHistory gathers every machine's history.
 func (m *model) fetchHistory() tea.Cmd {
-	return func() tea.Msg { return historyMsg{records: held.History(m.ctx, m.mesh)} }
+	gen := m.hgen
+	return func() tea.Msg { return historyMsg{records: held.History(m.ctx, m.mesh), gen: gen} }
 }
 
 func (m *model) applyHistory(h historyMsg) {
-	keep := ""
-	if r, ok := m.currentRecord(); ok {
-		keep = r.Key()
+	if h.gen != m.hgen {
+		return // from before a deletion
 	}
+	keep, _ := m.currentRecord()
 	m.hist, m.histLoaded = h.records, true
+	if m.threadCount(m.hthread) == 0 {
+		m.hthread = "" // it was deleted, perhaps from elsewhere
+	}
 	m.placeHistoryCursor(keep)
 }
 
-// shown is the history under the current filter.
+// shown is what the history page lists: with a conversation open, its
+// messages oldest first; otherwise each conversation under the current
+// filter, by its newest message, newest first.
 func (m *model) shown() []record {
 	var out []record
+	if m.hthread != "" {
+		for _, r := range m.hist {
+			if r.ThreadKey() == m.hthread {
+				out = append(out, r)
+			}
+		}
+		slices.Reverse(out)
+		return out
+	}
+	seen := map[string]bool{}
 	for _, r := range m.hist {
-		if m.filter.keeps(r) {
+		if k := r.ThreadKey(); m.filter.keeps(r) && !seen[k] {
+			seen[k] = true
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// threadCount is how many messages a conversation has.
+func (m *model) threadCount(key string) int {
+	n := 0
+	for _, r := range m.hist {
+		if r.ThreadKey() == key {
+			n++
+		}
+	}
+	return n
+}
+
+// deleteThread forgets the conversation everywhere it can reach.
+func (m *model) deleteThread(r record) tea.Cmd {
+	m.busy = true
+	m.say("deleting…", false)
+	key := r.ThreadKey()
+	return func() tea.Msg {
+		kept, err := held.DeleteThread(m.ctx, m.mesh, r.Entry.Thread)
+		return deletedMsg{thread: key, kept: kept, err: err}
+	}
+}
+
+func (m *model) applyDeleted(d deletedMsg) {
+	m.busy, m.mode = false, browsing
+	if d.err != nil {
+		m.say("couldn't delete the thread: "+d.err.Error(), true)
+		return
+	}
+	switch d.kept {
+	case 0:
+		m.say("thread deleted", false)
+	default:
+		m.say(fmt.Sprintf("thread deleted, except %d waiting for a decision in the inbox", d.kept), false)
+	}
+	// Off the page right away; the next fetch brings back anything that stayed.
+	m.hgen++
+	m.hist = slices.DeleteFunc(slices.Clone(m.hist), func(r record) bool { return r.ThreadKey() == d.thread })
+	if m.hthread == d.thread {
+		m.hthread = ""
+	}
+	m.hcursor = max(0, min(m.hcursor, len(m.shown())-1))
 }
 
 func (m *model) currentRecord() (record, bool) {
@@ -96,12 +166,13 @@ func (m *model) currentRecord() (record, bool) {
 	return s[m.hcursor], true
 }
 
-// placeHistoryCursor keeps the cursor on the message with key, or within
-// the list when it's gone.
-func (m *model) placeHistoryCursor(key string) {
+// placeHistoryCursor keeps the cursor on the message keep, or on its
+// conversation when listing those (a new message changes which one stands
+// for it), or within the list when it's gone.
+func (m *model) placeHistoryCursor(keep record) {
 	s := m.shown()
 	for i, r := range s {
-		if r.Key() == key {
+		if r.Key() == keep.Key() || m.hthread == "" && keep.Entry.ID != "" && r.ThreadKey() == keep.ThreadKey() {
 			m.hcursor = i
 			return
 		}
@@ -110,10 +181,34 @@ func (m *model) placeHistoryCursor(key string) {
 }
 
 func (m *model) historyKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.mode == confirmingDelete {
+		r, ok := m.currentRecord()
+		if ok && !m.busy && (k.String() == "y" || k.String() == "Y") {
+			return m, m.deleteThread(r)
+		}
+		m.mode = browsing
+		m.say("not deleted", false)
+		return m, nil
+	}
 	n := len(m.shown())
 	switch k.String() {
 	case "q":
 		return m, tea.Quit
+	case "enter":
+		if r, ok := m.currentRecord(); ok && m.hthread == "" {
+			m.hthread = r.ThreadKey()
+			m.hcursor = max(0, len(m.shown())-1) // the newest, where it was
+		}
+	case "esc":
+		if m.hthread != "" {
+			keep, _ := m.currentRecord()
+			m.hthread = ""
+			m.placeHistoryCursor(keep)
+		}
+	case "d", "x":
+		if _, ok := m.currentRecord(); ok && !m.busy {
+			m.mode = confirmingDelete
+		}
 	case "up", "k":
 		m.hcursor = max(0, m.hcursor-1)
 	case "down", "j":
@@ -123,18 +218,17 @@ func (m *model) historyKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "end", "G":
 		m.hcursor = max(0, n-1)
 	case "n":
-		m.startCompose("", "")
+		m.startCompose("", "", "")
 	case "r":
 		if r, ok := m.currentRecord(); ok {
-			m.startCompose(m.replyTo(r.Entry), r.Entry.Thread)
+			m.startCompose(m.replyTo(r.Entry), r.Entry.Thread, r.Entry.ID)
 		}
 	case "f":
-		keep := ""
-		if r, ok := m.currentRecord(); ok {
-			keep = r.Key()
+		if m.hthread == "" {
+			keep, _ := m.currentRecord()
+			m.filter = (m.filter + 1) % filter(len(filterTitles))
+			m.placeHistoryCursor(keep)
 		}
-		m.filter = (m.filter + 1) % filter(len(filterTitles))
-		m.placeHistoryCursor(keep)
 	}
 	return m, m.wantFull()
 }

@@ -41,7 +41,7 @@ type Held struct {
 // View is what the CLI shows.
 func (h *Held) View() proto.HeldView {
 	return proto.HeldView{
-		ID: h.ID, From: h.Msg.From, To: h.Msg.To, Thread: h.Msg.Thread,
+		ID: h.ID, MsgID: h.Msg.ID, ReplyTo: h.Msg.ReplyTo, From: h.Msg.From, To: h.Msg.To, Thread: h.Msg.Thread,
 		Peer: h.PeerName, Target: h.Target,
 		Routed: h.Target == "" && !h.Outbound && !h.Note, Outbound: h.Outbound,
 		HeldAt: h.HeldAt.Unix(), Text: h.Msg.Text, Fake: h.Fake, Note: h.Note,
@@ -178,6 +178,17 @@ func (s Store) Approve(peer ed25519.PublicKey, thread string) error {
 			}
 		}
 		st.Grants = append(st.Grants, grant{Peer: identity.Key(peer), Thread: thread, Until: until})
+		return nil
+	})
+}
+
+// RevokeThread closes a thread with every peer, for approvals given by
+// the time at: follow-ups to a deleted conversation ask again.
+func (s Store) RevokeThread(thread string, at int64) error {
+	return s.Update(func(st *State) error {
+		st.Grants = slices.DeleteFunc(st.Grants, func(g grant) bool {
+			return g.Thread == thread && g.Until.Add(-Grant).Unix() <= at
+		})
 		return nil
 	})
 }

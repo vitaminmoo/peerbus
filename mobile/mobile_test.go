@@ -273,7 +273,7 @@ func TestPhone(t *testing.T) {
 	if to == "" {
 		t.Fatalf("people: %+v", s.People)
 	}
-	if text, err := c.Send(to, "thanks for taking that", ""); err != nil || text != "sent to alice/notes#a2a2a2" {
+	if text, err := c.Send(to, "thanks for taking that", "", ""); err != nil || text != "sent to alice/notes#a2a2a2" {
 		t.Fatalf("send: %q %v", text, err)
 	}
 	var mine proto.Message

@@ -63,6 +63,10 @@ type Config struct {
 	OnMessage func(m proto.Message, foreign bool)
 	// OnNotice receives held/status/idle notices.
 	OnNotice func(kind, text string, meta map[string]string)
+	// OnReload answers a request from your own CLI to replace this process
+	// with the binary on disk. start, when not nil, runs after the answer
+	// has been sent and does the replacing.
+	OnReload func() (res proto.ReloadResult, start func(), err error)
 }
 
 type Mesh struct {
@@ -701,6 +705,11 @@ func (m *Mesh) Views() []proto.PeerView {
 			Cwd:       info.Cwd,
 			Account:   info.Account,
 			Resources: info.Resources,
+			Channels:  info.Channels,
+			Version:   info.Version,
+		}
+		if v.Channels != proto.ChannelsOn {
+			v.Channels = proto.ChannelsUnknown
 		}
 		v.Address = proto.Address(v.User, v.Name, info.SID)
 		out = append(out, v)

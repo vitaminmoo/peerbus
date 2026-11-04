@@ -23,6 +23,7 @@ import (
 	"github.com/vitaminmoo/peerbus/internal/channel"
 	"github.com/vitaminmoo/peerbus/internal/config"
 	"github.com/vitaminmoo/peerbus/internal/fcm"
+	"github.com/vitaminmoo/peerbus/internal/held"
 	"github.com/vitaminmoo/peerbus/internal/inbox"
 	"github.com/vitaminmoo/peerbus/internal/mesh"
 	"github.com/vitaminmoo/peerbus/internal/proto"
@@ -43,7 +44,7 @@ Identity and pairing:
 
 Using:
   peerbus peers [-filter TEXT] [-json]            sessions reachable right now
-  peerbus send [-thread ID] TO TEXT...
+  peerbus send [-thread ID] [-reply-to ID] TO TEXT...
   peerbus tui                                     every held message on all your machines: approve, route, decline
                                                   and the history of every message, yours and friends'
   peerbus inbox [-watch]                          this machine's messages waiting for your approval
@@ -55,6 +56,8 @@ Using:
 Running:
   peerbus channel                                 the MCP channel server Claude Code spawns
   peerbus mcp-config                              print the MCP server entry for Claude Code
+  peerbus reload                                  switch every session, on all your machines, to the binary
+                                                  on its disk, without reconnecting anything in Claude Code
   peerbus rendezvous [-listen HOST:PORT] [-fcm-credentials FILE]
                                                   run a rendezvous/relay server (UDP), optionally relaying pushes to phones
 `
@@ -73,6 +76,10 @@ func main() {
 		err = runRendezvous(ctx, args)
 	case "channel":
 		err = channel.Run(ctx, version)
+	case channel.ResumeProbe:
+		fmt.Println(channel.ResumeMagic, version)
+	case "reload":
+		err = runReload(ctx)
 	case "id":
 		err = runID(args)
 	case "invite":
@@ -247,12 +254,13 @@ func runPeers(ctx context.Context, args []string) error {
 func runSend(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	thread := fs.String("thread", "", "thread id to continue")
+	replyTo := fs.String("reply-to", "", "id of the message this answers")
 	pos, err := parse(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) < 2 {
-		return errors.New("usage: peerbus send [-thread ID] TO TEXT...")
+		return errors.New("usage: peerbus send [-thread ID] [-reply-to ID] TO TEXT...")
 	}
 	cfg, err := config.LoadClient()
 	if err != nil {
@@ -263,12 +271,50 @@ func runSend(ctx context.Context, args []string) error {
 		return err
 	}
 	defer m.Close()
-	res, err := m.Send(ctx, pos[0], strings.Join(pos[1:], " "), *thread)
+	res, err := m.Reply(ctx, pos[0], strings.Join(pos[1:], " "), *thread, *replyTo)
 	if err != nil {
 		return err
 	}
 	fmt.Println(channel.DescribeSend(res))
 	fmt.Println("(Sent from the CLI: replies can't reach you here.)")
+	return nil
+}
+
+// runReload has every session of yours replace itself with the peerbus
+// binary on its machine. Sessions off the mesh can't hear it.
+func runReload(ctx context.Context) error {
+	cfg, err := config.LoadClient()
+	if err != nil {
+		return err
+	}
+	m, err := control(ctx, cfg.Server(), 8*time.Second)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	out := held.Reload(ctx, m, 20*time.Second)
+	if len(out) == 0 {
+		fmt.Println("None of your sessions are online.")
+		return nil
+	}
+	failed := 0
+	for _, o := range out {
+		what := o.Status
+		switch o.Status {
+		case "current":
+			what = "already running the binary on disk (" + o.Version + ")"
+		case "reloaded":
+			what = "reloaded (" + o.Version + ")"
+		case "pending":
+			what = "reloading (" + o.Version + "), not seen back yet; check `peerbus peers`"
+		case "failed":
+			what, failed = "failed: "+o.Err.Error(), failed+1
+		}
+		fmt.Printf("%s on %s: %s\n", o.Addr, o.Host, what)
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d sessions didn't reload", failed, len(out))
+	}
 	return nil
 }
 

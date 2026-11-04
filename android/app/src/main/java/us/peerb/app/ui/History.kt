@@ -2,6 +2,7 @@ package us.peerb.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,9 +24,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -34,11 +37,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import us.peerb.app.Core
 import us.peerb.app.HUMAN
 import us.peerb.app.Record
 import us.peerb.app.ago
+import us.peerb.app.plural
 
 /** Which messages the history shows, as the TUI's f key cycles them. */
 private enum class Filter(val title: String) {
@@ -53,14 +59,26 @@ private enum class Filter(val title: String) {
     }
 }
 
-/** Every message your sessions sent and received, on every machine: the TUI's history page. */
+/** Newest first, ties broken by key, so a refresh never reshuffles them. */
+private val newestFirst = compareByDescending<Record> { it.at }.thenBy { it.key }
+
+/**
+ * Every conversation your sessions had, on every machine, and the messages
+ * of the one opened: the TUI's history page.
+ */
 @Composable
-fun HistoryPage(self: String, onWrite: (Draft) -> Unit) {
+fun HistoryPage(self: String, onWrite: (Draft) -> Unit, onStatus: (Status) -> Unit) {
     var records by remember { mutableStateOf<List<Record>?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
     var filter by rememberSaveable { mutableStateOf(Filter.All) }
+    var thread by rememberSaveable { mutableStateOf<String?>(null) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
+    var deleting by remember { mutableStateOf<Record?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    // Bumped by a deletion, so a fetch that began before it can't bring it back.
+    var generation by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(generation) {
         while (true) {
             try {
                 records = Core.history()
@@ -72,16 +90,54 @@ fun HistoryPage(self: String, onWrite: (Draft) -> Unit) {
         }
     }
 
-    val rec = open?.let { k -> records?.firstOrNull { it.key == k } }
+    val all = records.orEmpty()
+    val confirm = deleting
+    if (confirm != null) {
+        val n = all.count { it.threadKey == confirm.threadKey }
+        DeleteThreadDialog(n, busy, onNo = { deleting = null; onStatus(Status("not deleted", false)) }) {
+            busy = true
+            scope.launch {
+                try {
+                    onStatus(Status(Core.deleteThread(confirm.thread), false))
+                    generation++
+                    records = records?.filterNot { it.threadKey == confirm.threadKey }
+                    open = null
+                    thread = null
+                } catch (e: Exception) {
+                    onStatus(Status(e.message ?: "couldn't delete the thread", true))
+                } finally {
+                    busy = false
+                    deleting = null
+                }
+            }
+        }
+    }
+
+    val rec = open?.let { k -> all.firstOrNull { it.key == k } }
     if (rec != null) {
         BackHandler { open = null }
-        HistoryDetail(rec, self, onClose = { open = null }, onReply = { onWrite(Draft(replyTo(rec, self), rec.thread)) })
+        HistoryDetail(
+            rec,
+            self,
+            onClose = { open = null },
+            onReply = { onWrite(Draft(replyTo(rec, self), rec.thread, rec.id)) },
+            onDelete = { deleting = rec },
+        )
+        return
+    }
+
+    val inThread = thread?.let { t -> all.filter { it.threadKey == t }.sortedWith(newestFirst.reversed()) }.orEmpty()
+    if (thread != null && records != null && inThread.isEmpty()) SideEffect { thread = null } // deleted, perhaps from elsewhere
+    if (thread != null && inThread.isNotEmpty()) {
+        BackHandler { thread = null }
+        ThreadPage(inThread, self, onClose = { thread = null }, onOpen = { open = it.key }, onDelete = { deleting = inThread.last() })
         return
     }
 
     val c = LocalCasing.current
-    // Newest first, ties broken by key, so a refresh never reshuffles them.
-    val shown = records.orEmpty().filter { filter.keeps(it) }.sortedWith(compareByDescending<Record> { it.at }.thenBy { it.key })
+    // Each conversation, by its newest message under the filter.
+    val shown = all.filter { filter.keeps(it) }.sortedWith(newestFirst).distinctBy { it.threadKey }
+    val counts = all.groupingBy { it.threadKey }.eachCount()
     // A list per filter: switching starts at the top rather than anchored
     // to whatever message was on screen under the last one.
     val list = remember(filter) { LazyListState() }
@@ -124,17 +180,8 @@ fun HistoryPage(self: String, onWrite: (Draft) -> Unit) {
                     }
                 }
                 else -> LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 96.dp)) {
-                    items(shown, key = { it.key }) { r ->
-                        Panel(statusColour(r.status), Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp).clickable { open = r.key }) {
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text("${short(r.from, self)} → ${short(r.to, self)}", style = Type.mono, fontWeight = FontWeight.Bold, color = c.fg, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(ago(r.at), style = Type.monoSmall, color = c.muted)
-                                }
-                                Text(statusText(r, self), style = Type.monoSmall, color = statusColour(r.status), modifier = Modifier.padding(top = 2.dp))
-                                Text(r.text.lineSequence().first(), style = Type.body, color = c.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
-                            }
-                        }
+                    items(shown, key = { it.threadKey }) { r ->
+                        RecordRow(r, self, count = counts[r.threadKey] ?: 1) { thread = r.threadKey }
                     }
                 }
             }
@@ -144,7 +191,68 @@ fun HistoryPage(self: String, onWrite: (Draft) -> Unit) {
 }
 
 @Composable
-private fun HistoryDetail(r: Record, self: String, onClose: () -> Unit, onReply: () -> Unit) {
+private fun RecordRow(r: Record, self: String, count: Int, onClick: () -> Unit) {
+    val c = LocalCasing.current
+    Panel(statusColour(r.status), Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp).clickable(onClick = onClick)) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${short(r.from, self)} → ${short(r.to, self)}", style = Type.mono, fontWeight = FontWeight.Bold, color = c.fg, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (count > 1) Text(plural(count, "message"), style = Type.monoSmall, color = c.muted, modifier = Modifier.padding(horizontal = 8.dp))
+                Text(ago(r.at), style = Type.monoSmall, color = c.muted)
+            }
+            Text(statusText(r, self), style = Type.monoSmall, color = statusColour(r.status), modifier = Modifier.padding(top = 2.dp))
+            Text(r.text.lineSequence().first(), style = Type.body, color = c.muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp))
+        }
+    }
+}
+
+/** One conversation's messages, oldest first. */
+@Composable
+private fun ThreadPage(messages: List<Record>, self: String, onClose: () -> Unit, onOpen: (Record) -> Unit, onDelete: () -> Unit) {
+    val c = LocalCasing.current
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            BackLink(onClose)
+            Spacer(Modifier.weight(1f))
+            SectionLabel("thread · ${plural(messages.size, "message")}", Pal.teal)
+        }
+        LazyColumn(Modifier.weight(1f)) {
+            items(messages, key = { it.key }) { r -> RecordRow(r, self, count = 1) { onOpen(r) } }
+        }
+        Stripe(height = 3.dp)
+        Row(Modifier.fillMaxWidth().background(c.panel).padding(12.dp)) {
+            Keycap("Delete thread", onDelete, Modifier.fillMaxWidth(), key = "D", face = Pal.red)
+        }
+    }
+}
+
+@Composable
+private fun DeleteThreadDialog(messages: Int, busy: Boolean, onNo: () -> Unit, onYes: () -> Unit) {
+    val c = LocalCasing.current
+    Dialog(onDismissRequest = onNo) {
+        Column(
+            Modifier
+                .background(c.panel, RoundedCornerShape(6.dp))
+                .border(2.dp, Pal.ink, RoundedCornerShape(6.dp))
+                .padding(18.dp),
+        ) {
+            SectionLabel("delete", Pal.red)
+            Text("Delete this thread?", style = Type.title, color = c.fg, modifier = Modifier.padding(top = 14.dp))
+            Text(
+                "${plural(messages, "message")} go from all your machines. Messages waiting for you to approve stay in your inbox. Nobody else is told, and their copies stay.",
+                color = c.muted,
+                modifier = Modifier.padding(top = 4.dp, bottom = 18.dp),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Keycap("No", onNo, Modifier.weight(1f), key = "N")
+                Keycap("Yes", onYes, Modifier.weight(1f), key = "Y", face = Pal.red, enabled = !busy)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryDetail(r: Record, self: String, onClose: () -> Unit, onReply: () -> Unit, onDelete: () -> Unit) {
     val c = LocalCasing.current
     var text by remember(r.key) { mutableStateOf(r.text) }
     var more by remember(r.key) { mutableStateOf<String?>(null) }
@@ -171,6 +279,7 @@ private fun HistoryDetail(r: Record, self: String, onClose: () -> Unit, onReply:
             Field("to", r.to)
             Field("status", statusText(r, self))
             Field("sent", "${ago(r.at)} ago", note = "thread ${r.thread} · logged on ${r.machines.joinToString(", ")}")
+            if (r.replyTo.isNotEmpty()) Field("reply", "to message ${r.replyTo}")
             Spacer(Modifier.height(14.dp))
             PhosphorScreen(Modifier.fillMaxWidth()) {
                 SelectionContainer { Text(text, style = Type.screen) }
@@ -179,7 +288,8 @@ private fun HistoryDetail(r: Record, self: String, onClose: () -> Unit, onReply:
         }
         Stripe(height = 3.dp)
         Row(Modifier.fillMaxWidth().background(c.panel).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Keycap("Reply to ${short(replyTo(r, self), self)}", onReply, Modifier.fillMaxWidth(), key = "R", face = Pal.teal)
+            Keycap("Reply to ${short(replyTo(r, self), self)}", onReply, Modifier.weight(2f), key = "R", face = Pal.teal)
+            Keycap("Delete thread", onDelete, Modifier.weight(1f), key = "D", face = Pal.red)
         }
     }
 }
