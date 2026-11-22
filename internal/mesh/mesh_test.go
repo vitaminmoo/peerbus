@@ -861,3 +861,55 @@ func TestFakeHeld(t *testing.T) {
 		t.Fatalf("history: %+v", h.Messages)
 	}
 }
+
+// A session a friend can't see can still write to them. They can then
+// answer it: in the thread it started the answer is delivered, and
+// anything else they send it waits for the human, even with deliver=auto.
+func TestHiddenSessionHearsBack(t *testing.T) {
+	srv := server(t)
+	alice, bob := store(t, "alice"), store(t, "bob")
+	pair(t, alice, bob)
+	if err := alice.Update(func(p *identity.Peers) error {
+		p.ByName("bob").Perms.Sessions, p.ByName("bob").Perms.Deliver = []string{"shown*"}, "auto"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stateA := t.TempDir()
+	a1, evA1 := start(t, alice, stateA, srv, proto.KindSession, proto.SessionInfo{SID: "a1a1a1a1", Name: "quiet", Host: "h", Status: "idle", Cwd: "/secret"})
+	a2, _ := start(t, alice, stateA, srv, proto.KindSession, proto.SessionInfo{SID: "a2a2a2a2", Name: "shown", Host: "h", Status: "idle"})
+	b1, evB1 := start(t, bob, t.TempDir(), srv, proto.KindSession, proto.SessionInfo{SID: "b1b1b1b1", Name: "bobsess", Host: "h", Status: "idle"})
+	waitFor(t, "connected", func() bool {
+		return sees(b1, "alice/shown#a2a2a2") && sees(a1, "bob/bobsess#b1b1b1") && sees(a2, "bob/bobsess#b1b1b1")
+	})
+	if sees(b1, "alice/quiet#a1a1a1") {
+		t.Fatal("bob sees a session outside his globs")
+	}
+	if _, err := b1.Send(context.Background(), "alice/quiet", "unasked", ""); err == nil {
+		t.Fatal("reached a hidden session that never wrote")
+	}
+
+	sent, err := a1.Send(context.Background(), "bob/bobsess", "question", "")
+	if err != nil || sent.Status != "held" {
+		t.Fatalf("hidden send: %+v %v", sent, err)
+	}
+	waitFor(t, "shown while the thread is open", func() bool { return sees(b1, "alice/quiet#a1a1a1") })
+	for _, v := range b1.Views() {
+		if v.Name == "quiet" && (v.Cwd != "" || v.Host != "") {
+			t.Fatalf("shows more than it needs: %+v", v)
+		}
+	}
+	res, err := b1.Reply(context.Background(), "alice/quiet#a1a1a1", "answer", sent.Thread, sent.ID)
+	if err != nil || res.Status != "delivered" {
+		t.Fatalf("answer in the thread: %+v %v", res, err)
+	}
+	if m := evA1.msg(t); m.Text != "answer" || m.Thread != sent.Thread {
+		t.Fatalf("got %+v", m)
+	}
+	res, err = b1.Send(context.Background(), "alice/quiet#a1a1a1", "something else", "")
+	if err != nil || res.Status != "held" {
+		t.Fatalf("outside the thread: %+v %v", res, err)
+	}
+	evA1.notice(t, "held")
+	_ = evB1
+}

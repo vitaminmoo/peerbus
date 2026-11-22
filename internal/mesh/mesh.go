@@ -574,8 +574,15 @@ func (m *Mesh) helloFor(peer *identity.Peer) proto.Frame {
 	f := proto.Frame{Type: proto.THello, V: proto.Version, Kind: m.cfg.Kind, Handle: hex.EncodeToString(h[:])}
 	if peer != nil && m.cfg.Kind == proto.KindSession {
 		if !peer.Perms.MaySee(info.Host, info.Name) {
-			f.Kind = proto.KindHidden
-			info = proto.SessionInfo{SID: info.SID, Name: info.Name}
+			bare := proto.SessionInfo{SID: info.SID, Name: info.Name}
+			if m.inbox.Shown(ed25519.PublicKey(peer.Key), info.SID) {
+				// It has a thread open with them: they can reach it, and
+				// learn no more about it than that takes.
+				bare.Status, bare.Channels, bare.Version = info.Status, info.Channels, info.Version
+			} else {
+				f.Kind = proto.KindHidden
+			}
+			info = bare
 		} else {
 			if !peer.Perms.ShowDetails {
 				info.Cwd, info.Account = "", ""

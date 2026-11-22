@@ -392,7 +392,20 @@ func (m *model) footer(w int) string {
 				s = k("↑↓", "move") + k("enter", "open") + k("r", "reply") + k("d", "delete") + k("n", "write") + k("f", "filter") + k("tab", held) + k("q", "quit")
 			}
 		} else {
-			s = k("↑↓", "move") + k("a", "approve") + k("r", "route/reply") + k("d", "decline") + k("n", "write") + k("tab", "history") + k("q", "quit")
+			// The keys for the message under the cursor: one to read
+			// has nothing to approve.
+			act := k("a", "approve") + k("r", "route") + k("d", "decline")
+			if it, ok := m.current(); ok {
+				switch it.Section() {
+				case toRead:
+					act = k("r", "reply") + k("d", "dismiss")
+				case forYou:
+					act = k("a", "pick a session") + k("d", "decline")
+				case yours:
+					act = k("a", "send") + k("d", "don't send")
+				}
+			}
+			s = k("↑↓", "move") + act + k("n", "write") + k("tab", "history") + k("q", "quit")
 		}
 	}
 	return truncate(s, w)

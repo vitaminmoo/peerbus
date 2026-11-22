@@ -135,7 +135,7 @@ func TestDeleteThread(t *testing.T) {
 	if err != nil || held.Status != "held" {
 		t.Fatalf("bob: %+v %v", held, err)
 	}
-	if err := one.inbox.Approve(pub(t, bob), gone.Thread); err != nil {
+	if err := one.inbox.Approve(pub(t, bob), gone.Thread, ""); err != nil {
 		t.Fatal(err)
 	}
 

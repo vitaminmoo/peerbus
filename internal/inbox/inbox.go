@@ -52,6 +52,10 @@ type grant struct {
 	Peer   identity.Key `json:"peer"`
 	Thread string       `json:"thread"`
 	Until  time.Time    `json:"until"`
+	// Session is set when the session in the thread is one the peer's
+	// sessions setting hides from them: while this lasts it shows itself
+	// to them, so they can answer.
+	Session string `json:"session,omitempty"`
 }
 
 type State struct {
@@ -167,19 +171,37 @@ func (s Store) Take(id string) (*Held, error) {
 	return out, err
 }
 
-// Approve opens a thread with a peer for Grant.
-func (s Store) Approve(peer ed25519.PublicKey, thread string) error {
+// Approve opens a thread with a peer for Grant. session is the id of the
+// session in it when the peer otherwise couldn't see that session, and
+// empty when they can.
+func (s Store) Approve(peer ed25519.PublicKey, thread, session string) error {
 	return s.Update(func(st *State) error {
 		until := time.Now().Add(Grant)
 		for i, g := range st.Grants {
-			if g.Peer.Equal(peer) && g.Thread == thread {
+			if g.Peer.Equal(peer) && g.Thread == thread && g.Session == session {
 				st.Grants[i].Until = until
 				return nil
 			}
 		}
-		st.Grants = append(st.Grants, grant{Peer: identity.Key(peer), Thread: thread, Until: until})
+		st.Grants = append(st.Grants, grant{Peer: identity.Key(peer), Thread: thread, Until: until, Session: session})
 		return nil
 	})
+}
+
+// Shown reports whether session, which peer's sessions setting hides from
+// them, has a thread open with them, and so shows itself for now.
+func (s Store) Shown(peer ed25519.PublicKey, session string) bool {
+	st, err := s.Load()
+	if err != nil || session == "" {
+		return false
+	}
+	now := time.Now()
+	for _, g := range st.Grants {
+		if g.Peer.Equal(peer) && g.Session == session && g.Until.After(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // RevokeThread closes a thread with every peer, for approvals given by

@@ -158,7 +158,11 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	m.mu.Lock()
 	me := m.info
 	m.mu.Unlock()
-	if peer != nil && !peer.Perms.MaySee(me.Host, me.Name) {
+	// A session the peer can't see takes nothing from them, unless it has
+	// a thread open with them: then they can answer, and what they send
+	// outside that thread waits for the human whatever deliver says.
+	hidden := peer != nil && !peer.Perms.MaySee(me.Host, me.Name)
+	if hidden && !m.inbox.Shown(l.key, me.SID) {
 		return proto.SendResult{}, errors.New("no such session")
 	}
 	toHuman := strings.HasSuffix(f.To, "/"+proto.Human)
@@ -194,7 +198,7 @@ func (m *Mesh) receive(l *Link, f proto.Frame) (proto.SendResult, error) {
 	if peer != nil {
 		rec.Peer = peer.Name
 	}
-	if peer == nil || peer.Perms.Deliver == "auto" || m.inbox.Approved(l.key, thread) {
+	if peer == nil || (peer.Perms.Deliver == "auto" && !hidden) || m.inbox.Approved(l.key, thread) {
 		m.cfg.OnMessage(msg, peer != nil)
 		res.Status = "delivered"
 		rec.Status = res.Status
@@ -335,7 +339,7 @@ func (m *Mesh) send(ctx context.Context, to, text, thread, replyTo, id string, h
 			return proto.SendResult{Status: "ask", ID: h.ID, Thread: thread, To: addr, Unverified: unverified}, nil
 		}
 		// We accept replies in a thread we started.
-		m.inbox.Approve(ed25519.PublicKey(tgt.peer.Key), thread)
+		m.openThread(ed25519.PublicKey(tgt.peer.Key), tgt.peer, thread)
 	}
 	var res proto.SendResult
 	if err := tgt.link.Request(ctx, proto.Frame{Type: proto.TSend, ID: id, Thread: thread, ReplyTo: replyTo, Text: text, To: wire}, &res); err != nil {
@@ -611,7 +615,7 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 	}
 	var res proto.SendResult
 	if to == "" || to == mySID {
-		if err := m.inbox.Approve(ed25519.PublicKey(h.Peer), h.Msg.Thread); err != nil {
+		if err := m.openThread(ed25519.PublicKey(h.Peer), m.peerFor(ed25519.PublicKey(h.Peer)), h.Msg.Thread); err != nil {
 			return proto.SendResult{}, err
 		}
 		if _, err := m.inbox.Take(id); err != nil {
@@ -642,6 +646,31 @@ func (m *Mesh) approve(id, to string) (proto.SendResult, error) {
 		l.write(proto.Frame{Type: proto.TNotice, Kind: "status", Meta: map[string]string{"status": "approved", "msg_id": msg.ID, "thread": msg.Thread}})
 	}
 	return res, nil
+}
+
+// openThread lets messages in thread from the person with key flow to
+// this session for inbox.Grant. peer is nil for a test message's made-up
+// sender. A session their sessions setting hides from them shows itself
+// to them for as long, or they couldn't answer it.
+func (m *Mesh) openThread(key ed25519.PublicKey, peer *identity.Peer, thread string) error {
+	m.mu.Lock()
+	me := m.info
+	links := m.snapshot()
+	m.mu.Unlock()
+	if peer == nil || m.cfg.Kind != proto.KindSession || peer.Perms.MaySee(me.Host, me.Name) {
+		return m.inbox.Approve(key, thread, "")
+	}
+	if err := m.inbox.Approve(key, thread, me.SID); err != nil {
+		return err
+	}
+	for _, l := range links {
+		if sameUser(l, peer) {
+			f := m.helloFor(peer)
+			f.Type = proto.TUpdate
+			l.write(f)
+		}
+	}
+	return nil
 }
 
 // deliverHere hands an approved message to this session.
@@ -677,7 +706,7 @@ func (m *Mesh) deliver(l *Link, f proto.Frame) (proto.SendResult, error) {
 	if peer == nil {
 		return proto.SendResult{}, errors.New("that sender isn't one of your peers any more")
 	}
-	if err := m.inbox.Approve(ed25519.PublicKey(h.Peer), h.Msg.Thread); err != nil {
+	if err := m.openThread(ed25519.PublicKey(h.Peer), peer, h.Msg.Thread); err != nil {
 		return proto.SendResult{}, err
 	}
 	return m.deliverHere(&h), nil

@@ -193,7 +193,7 @@ peerbus peer rm alice</code></pre>
   <tbody>
     <tr><td><code>deliver</code></td><td>hold</td><td><code>hold</code>: their messages wait for approval, which opens that thread for two hours (as does your Claude messaging them first). <code>auto</code>: delivered.</td></tr>
     <tr><td><code>send</code></td><td>auto</td><td><code>ask</code>: your sessions' messages to them wait for your approval.</td></tr>
-    <tr><td><code>sessions</code></td><td>*</td><td>Globs over the session names they can see and address. With a <code>/</code>, globs match <code>machine/name</code>: <code>laptop/*</code>.</td></tr>
+    <tr><td><code>sessions</code></td><td>*</td><td>Globs over the session names they can see and address. With a <code>/</code>, globs match <code>machine/name</code>: <code>laptop/*</code>. A session outside them that writes to them can be answered for two hours: answers in its thread are delivered, and anything else they send it is held.</td></tr>
     <tr><td><code>details</code></td><td>false</td><td>Show them working directories and Claude accounts.</td></tr>
     <tr><td><code>resources</code></td><td>true</td><td>Show them what your sessions advertise.</td></tr>
   </tbody>
